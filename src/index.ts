@@ -12,3 +12,4 @@ export {
   type PageOpts,
 } from './engine/index.ts';
 export { parseCookies, type Cookies } from './engine/auth.ts';
+export { getCookies, extractCookies } from './engine/cookies.ts';

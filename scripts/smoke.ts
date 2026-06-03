@@ -10,16 +10,14 @@
 // Export auth_token + ct0 from a logged-in x.com browser session (DevTools →
 // Application → Cookies → https://x.com). This is read-only; never commit them.
 import { EngineError, createEngine } from '../src/engine/index.ts';
-import { parseCookies } from '../src/engine/auth.ts';
+import { getCookies } from '../src/engine/cookies.ts';
 
 async function main(): Promise<void> {
-  const raw = process.env.XRELAY_COOKIES;
-  if (!raw) {
-    console.error('Set XRELAY_COOKIES (e.g. "auth_token=...; ct0=...") and retry.');
-    process.exit(2);
-  }
-
-  const engine = createEngine({ cookies: parseCookies(raw) });
+  // Auto-extracts from the local browser (Arc/Chrome/Brave/Edge) unless
+  // XRELAY_COOKIES is set. First run may show a one-time Keychain prompt.
+  const cookies = getCookies();
+  console.error(`[smoke] cookies: auth_token=${cookies.authToken.slice(0, 6)}… ct0=${cookies.ct0.slice(0, 6)}…`);
+  const engine = createEngine({ cookies });
   const args = process.argv.slice(2);
   const flag = args[0];
 

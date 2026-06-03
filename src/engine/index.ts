@@ -5,6 +5,7 @@
 import type { SearchResult, ThreadResult, Tweet, TweetPage, UserProfile } from '../types.ts';
 import type { Cookies } from './auth.ts';
 import { type ClientResult, type TransactionProvider, createClient } from './client.ts';
+import { getCookies } from './cookies.ts';
 import {
   type BuiltRequest,
   type OpName,
@@ -62,7 +63,8 @@ export interface Engine {
 }
 
 export interface EngineDeps {
-  cookies: Cookies;
+  /** Cookies for auth. Omit to auto-extract from the local browser (getCookies). */
+  cookies?: Cookies;
   fetchImpl?: typeof fetch;
   /** Injectable transport (tests). Defaults to a real client over the X API. */
   client?: EngineClient;
@@ -132,10 +134,12 @@ export function createEngine(deps: EngineDeps): Engine {
     ? { provider: deps.transaction, refresh: async () => {} }
     : createTransactionProvider(deps.fetchImpl);
 
+  // Resolve cookies only when we actually build a network client (auto-extract
+  // from the browser if none were passed); a test-injected client needs none.
   const client: EngineClient =
     deps.client ??
     createClient({
-      cookies: deps.cookies,
+      cookies: deps.cookies ?? getCookies(),
       transaction: txn.provider,
       ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
     });
