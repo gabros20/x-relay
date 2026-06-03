@@ -74,8 +74,9 @@ exploration.
   (TDD the normalizer + cursor/end-detection on fixtures). The core, hardest, novel work.
 - **2 — Commands + CLI + MCP + SKILL**: `search`/`user`/`user-posts`/`thread`, registry-driven CLI, MCP shim,
   generated funnel SKILL.
-- **3 — Cache + sync**: local store, snowflake-watermark incremental sync, `bookmarks`/`my-posts`/`sync`,
-  optional semantic ranking (compose the existing `bookmark-search` archive or add embeddings).
+- **3 — Cache + sync**: an **independent** local store under `~/.xrelay` (sqlite/jsonl), optionally *seeded*
+  from the existing `agentic-engineer-bookmarks` archive but separate going forward. Snowflake-watermark
+  incremental sync, `bookmarks`/`my-posts`/`sync`, own keyword+metadata ranking (semantic layer optional later).
 - **4 — Ship**: CI/CD, semantic-release, npm publish, live smoke tests, README.
 
 ## Testing rules (mirror ytrelay)
