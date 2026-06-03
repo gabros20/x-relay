@@ -13,3 +13,14 @@ export {
 } from './engine/index.ts';
 export { parseCookies, type Cookies } from './engine/auth.ts';
 export { getCookies, extractCookies } from './engine/cookies.ts';
+export {
+  COMMANDS,
+  commandNames,
+  runSearch,
+  runUser,
+  runUserPosts,
+  runThread,
+  runBookmarks,
+  buildSearchQuery,
+} from './commands/index.ts';
+export { parseArgs, dispatch, run } from './cli.ts';
