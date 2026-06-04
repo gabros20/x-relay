@@ -3,7 +3,15 @@
 // X Articles rendered to Markdown. Pure — no I/O, no network. Reuses parse.ts's
 // findDict / parseUserResult / parseTweetResult so it stays robust to layout drift.
 
-import type { Article, Author, MediaItem, Trend, UserPage, UserProfile } from '../types.ts';
+import type {
+  Article,
+  Author,
+  Community,
+  MediaItem,
+  Trend,
+  UserPage,
+  UserProfile,
+} from '../types.ts';
 import { findDict, parseTweetResult, parseUserResult } from './parse.ts';
 
 // ── Narrowing helpers (local, mirror parse.ts) ───────────────────────────────
@@ -395,4 +403,88 @@ function articleAuthor(tweetResult: Record<string, unknown>): Author | undefined
   } catch {
     return undefined;
   }
+}
+
+// ── Community ─────────────────────────────────────────────────────────────────
+
+/** Map a UserProfile down to the embedded-author shape (community creator). */
+function authorFromProfile(profile: UserProfile): Author {
+  const author: Author = {
+    id: profile.id,
+    handle: profile.handle,
+    name: profile.name,
+    verified: profile.verified,
+    followers: profile.followers,
+  };
+  if (profile.avatar !== undefined) author.avatar = profile.avatar;
+  return author;
+}
+
+/** Collect `.name` strings from a community `rules[]` array. */
+function ruleNames(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: string[] = [];
+  for (const rule of raw) {
+    const name = isRecord(rule) ? asString(rule.name) : undefined;
+    if (name !== undefined) out.push(name);
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+/** Keep only the string members of an array (e.g. search_tags). */
+function stringArray(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out = raw.filter((v): v is string => typeof v === 'string');
+  return out.length > 0 ? out : undefined;
+}
+
+/** The community creator as an Author, from creator_results.result. */
+function communityCreator(result: Record<string, unknown>): Author | undefined {
+  const node = child(result, 'creator_results')?.result;
+  const profile = parseUserResult(node);
+  return profile ? authorFromProfile(profile) : undefined;
+}
+
+/** Populate the optional scalar fields on a community in place. */
+function applyCommunityOptionals(community: Community, result: Record<string, unknown>): void {
+  const description = asString(result.description);
+  if (description !== undefined) community.description = description;
+  const memberCount = asNumber(result.member_count);
+  if (memberCount !== undefined) community.memberCount = memberCount;
+  const moderatorCount = asNumber(result.moderator_count);
+  if (moderatorCount !== undefined) community.moderatorCount = moderatorCount;
+  const createdMs = asNumber(result.created_at);
+  if (createdMs !== undefined) community.createdAt = new Date(createdMs).toISOString();
+  const role = asString(result.role);
+  if (role !== undefined) community.role = role;
+  const joinPolicy = asString(result.join_policy);
+  if (joinPolicy !== undefined) community.joinPolicy = joinPolicy;
+  const topic = asString(child(result, 'primary_community_topic')?.topic_name);
+  if (topic !== undefined) community.topic = topic;
+  const rules = ruleNames(result.rules);
+  if (rules !== undefined) community.rules = rules;
+  const tags = stringArray(result.search_tags);
+  if (tags !== undefined) community.tags = tags;
+  const creator = communityCreator(result);
+  if (creator !== undefined) community.creator = creator;
+}
+
+/**
+ * Normalize a CommunityByRestId response into a Community. Locates the
+ * `communityResults.result` node (layout-drift safe), converts the epoch-ms
+ * created_at to ISO, and reduces rules/tags/creator to clean shapes. Returns
+ * null when the response carries no community.
+ */
+export function parseCommunity(json: unknown): Community | null {
+  const wrapper = findDict(json, 'communityResults', true)[0];
+  const result = isRecord(wrapper) ? wrapper.result : undefined;
+  if (!isRecord(result)) return null;
+
+  const id = asString(result.id_str) ?? asString(result.rest_id);
+  const name = asString(result.name);
+  if (id === undefined || name === undefined) return null;
+
+  const community: Community = { id, name, url: `https://x.com/i/communities/${id}` };
+  applyCommunityOptionals(community, result);
+  return community;
 }

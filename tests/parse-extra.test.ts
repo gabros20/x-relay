@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   extractTweetMedia,
   parseArticle,
+  parseCommunity,
   parseTrends,
   parseUserTimeline,
 } from '../src/engine/parse-extra.ts';
@@ -349,5 +350,69 @@ describe('parseArticle', () => {
 
   test('returns null when no article_results present', () => {
     expect(parseArticle({ data: { tweetResult: { result: { rest_id: '1' } } } })).toBeNull();
+  });
+});
+
+// ── parseCommunity ───────────────────────────────────────────────────────────
+
+function communityJson() {
+  return {
+    data: {
+      communityResults: {
+        result: {
+          __typename: 'Community',
+          id_str: '1493446837214187523',
+          rest_id: '1493446837214187523',
+          name: 'Build in Public',
+          description: 'Share what you build',
+          member_count: 12345,
+          moderator_count: 7,
+          created_at: 1644900447551,
+          role: 'NonMember',
+          join_policy: 'Open',
+          primary_community_topic: { topic_id: '603', topic_name: 'Entrepreneurship' },
+          rules: [
+            { name: 'Be kind', description: 'no flames', rest_id: '1' },
+            { name: 'Stay on topic', rest_id: '2' },
+          ],
+          search_tags: ['buildinpublic', 'indiehackers'],
+          creator_results: {
+            result: {
+              __typename: 'User',
+              rest_id: 'u9',
+              core: { screen_name: 'levelsio', name: 'Pieter' },
+              is_blue_verified: true,
+              legacy: { followers_count: 500000 },
+            },
+          },
+        },
+      },
+    },
+  };
+}
+
+describe('parseCommunity', () => {
+  test('normalizes the community metadata, epoch→ISO, rules/tags, and creator', () => {
+    const c = parseCommunity(communityJson());
+    expect(c).not.toBeNull();
+    if (c === null) return;
+    expect(c.id).toBe('1493446837214187523');
+    expect(c.name).toBe('Build in Public');
+    expect(c.description).toBe('Share what you build');
+    expect(c.memberCount).toBe(12345);
+    expect(c.moderatorCount).toBe(7);
+    expect(c.createdAt).toBe('2022-02-15T04:47:27.551Z');
+    expect(c.role).toBe('NonMember');
+    expect(c.joinPolicy).toBe('Open');
+    expect(c.topic).toBe('Entrepreneurship');
+    expect(c.rules).toEqual(['Be kind', 'Stay on topic']);
+    expect(c.tags).toEqual(['buildinpublic', 'indiehackers']);
+    expect(c.url).toBe('https://x.com/i/communities/1493446837214187523');
+    expect(c.creator?.handle).toBe('levelsio');
+    expect(c.creator?.verified).toBe(true);
+  });
+
+  test('returns null when there is no community result', () => {
+    expect(parseCommunity({ data: {} })).toBeNull();
   });
 });

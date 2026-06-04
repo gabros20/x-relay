@@ -9,6 +9,8 @@ import {
   type SearchCommandOpts,
   runArticle,
   runBookmarks,
+  runCommunity,
+  runCommunityInfo,
   runFollowers,
   runFollowing,
   runLikers,
@@ -152,6 +154,51 @@ function buildSearchOpts(parsed: ParsedArgs): SearchCommandOpts {
   };
 }
 
+/**
+ * The simple target-based read endpoints (one id/handle + an optional limit).
+ * Split out of dispatch() to keep each switch small. Returns null when the
+ * command isn't one of these, so dispatch() can fall through to UNKNOWN_COMMAND.
+ */
+function dispatchReadOps(
+  parsed: ParsedArgs,
+  engine: Engine,
+  command: string | undefined,
+  target: string,
+): Promise<Envelope<unknown>> | null {
+  const limit = num(parsed, 'limit');
+  switch (command) {
+    case 'list':
+      return runList(engine, target, limit);
+    case 'user-media':
+      return runUserMedia(engine, extractHandle(target) ?? target, limit);
+    case 'followers':
+      return runFollowers(engine, extractHandle(target) ?? target, limit);
+    case 'following':
+      return runFollowing(engine, extractHandle(target) ?? target, limit);
+    case 'retweeters':
+      return runRetweeters(engine, extractTweetId(target) ?? target, limit);
+    case 'likers':
+      return runLikers(engine, extractTweetId(target) ?? target, limit);
+    case 'quoters':
+      return runQuoters(engine, extractTweetId(target) ?? target, limit);
+    case 'trends':
+      return runTrends(engine, {
+        ...(num(parsed, 'woeid') !== undefined ? { woeid: num(parsed, 'woeid') } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+      });
+    case 'article':
+      return runArticle(engine, extractTweetId(target) ?? target);
+    case 'media':
+      return runMedia(engine, extractTweetId(target) ?? target, first(parsed, 'out'));
+    case 'community':
+      return runCommunity(engine, target, limit);
+    case 'community-info':
+      return runCommunityInfo(engine, target);
+    default:
+      return null;
+  }
+}
+
 /** Dispatch parsed args against an engine. Returns an envelope (does not print). */
 export async function dispatch(parsed: ParsedArgs, engine: Engine): Promise<Envelope<unknown>> {
   const { command } = parsed;
@@ -186,31 +233,11 @@ export async function dispatch(parsed: ParsedArgs, engine: Engine): Promise<Enve
         ...(num(parsed, 'max') !== undefined ? { max: num(parsed, 'max') } : {}),
       });
     }
-    case 'list':
-      return runList(engine, target, num(parsed, 'limit'));
-    case 'user-media':
-      return runUserMedia(engine, extractHandle(target) ?? target, num(parsed, 'limit'));
-    case 'followers':
-      return runFollowers(engine, extractHandle(target) ?? target, num(parsed, 'limit'));
-    case 'following':
-      return runFollowing(engine, extractHandle(target) ?? target, num(parsed, 'limit'));
-    case 'retweeters':
-      return runRetweeters(engine, extractTweetId(target) ?? target, num(parsed, 'limit'));
-    case 'likers':
-      return runLikers(engine, extractTweetId(target) ?? target, num(parsed, 'limit'));
-    case 'quoters':
-      return runQuoters(engine, extractTweetId(target) ?? target, num(parsed, 'limit'));
-    case 'trends':
-      return runTrends(engine, {
-        ...(num(parsed, 'woeid') !== undefined ? { woeid: num(parsed, 'woeid') } : {}),
-        ...(num(parsed, 'limit') !== undefined ? { limit: num(parsed, 'limit') } : {}),
-      });
-    case 'article':
-      return runArticle(engine, extractTweetId(target) ?? target);
-    case 'media':
-      return runMedia(engine, extractTweetId(target) ?? target, first(parsed, 'out'));
     default:
-      return err('cli', 'UNKNOWN_COMMAND', `unknown command: ${command ?? '(none)'}`);
+      return (
+        dispatchReadOps(parsed, engine, command, target) ??
+        Promise.resolve(err('cli', 'UNKNOWN_COMMAND', `unknown command: ${command ?? '(none)'}`))
+      );
   }
 }
 

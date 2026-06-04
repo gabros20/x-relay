@@ -3,6 +3,7 @@ import { dispatch, parseArgs } from '../src/cli.ts';
 import type { Engine } from '../src/engine/index.ts';
 import type {
   Article,
+  Community,
   MediaItem,
   SearchResult,
   ThreadResult,
@@ -73,6 +74,14 @@ function fakeEngine(calls: string[]): Engine {
     async media(id): Promise<MediaItem[]> {
       calls.push(`media:${id}`);
       return [];
+    },
+    async community(id): Promise<TweetPage> {
+      calls.push(`community:${id}`);
+      return { tweets: [] };
+    },
+    async communityInfo(id): Promise<Community | null> {
+      calls.push(`communityInfo:${id}`);
+      return { id, name: 'C', url: `https://x.com/i/communities/${id}` };
     },
     async me(): Promise<string | null> {
       calls.push('me');
@@ -166,6 +175,14 @@ describe('dispatch', () => {
       'article:999',
       'media:777',
     ]);
+  });
+
+  test('community / community-info dispatch with the community id', async () => {
+    const calls: string[] = [];
+    const eng = fakeEngine(calls);
+    await dispatch(parseArgs(['community', '1493446837214187523', '--limit', '5']), eng);
+    await dispatch(parseArgs(['community-info', '1493446837214187523']), eng);
+    expect(calls).toEqual(['community:1493446837214187523', 'communityInfo:1493446837214187523']);
   });
 
   test('unknown command yields an error envelope', async () => {

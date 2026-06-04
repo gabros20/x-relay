@@ -3,6 +3,8 @@ import {
   FEATURES,
   OPS,
   bookmarksRequest,
+  communityRequest,
+  communityTweetsRequest,
   encodeParams,
   graphqlUrl,
   searchRequest,
@@ -145,6 +147,32 @@ describe('tweetDetailRequest', () => {
     const v = variables as Record<string, unknown>;
     expect(v.focalTweetId).toBe('20');
     expect(v.cursor).toBe('C');
+  });
+});
+
+describe('communityRequest / communityTweetsRequest', () => {
+  test('communityRequest carries the communityId and FEATURES', () => {
+    const { variables, features } = communityRequest({ communityId: '149' });
+    expect((variables as Record<string, unknown>).communityId).toBe('149');
+    expect(
+      (features as Record<string, unknown>).responsive_web_graphql_timeline_navigation_enabled,
+    ).toBe(FEATURES.responsive_web_graphql_timeline_navigation_enabled);
+  });
+
+  test('communityTweetsRequest sets the Community display location + ranking and passes cursor', () => {
+    const { variables } = communityTweetsRequest({ communityId: '149', cursor: 'C' });
+    const v = variables as Record<string, unknown>;
+    expect(v.communityId).toBe('149');
+    expect(v.displayLocation).toBe('Community');
+    expect(v.rankingMode).toBe('Relevance');
+    expect(v.withCommunity).toBe(true);
+    expect(v.count).toBe(20);
+    expect(v.cursor).toBe('C');
+  });
+
+  test('communityTweetsRequest honors a Recency ranking override', () => {
+    const { variables } = communityTweetsRequest({ communityId: '1', rankingMode: 'Recency' });
+    expect((variables as Record<string, unknown>).rankingMode).toBe('Recency');
   });
 });
 

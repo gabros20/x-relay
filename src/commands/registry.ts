@@ -118,6 +118,18 @@ export const COMMANDS: CommandDef[] = [
     summary: "A tweet's image/video assets (URLs); --out <dir> downloads the files.",
     usage: 'xrelay media <id|url> [--out <dir>]',
   },
+  {
+    name: 'community',
+    cost: 'medium',
+    summary: "A community's tweet feed (a topical, moderated sub-network).",
+    usage: 'xrelay community <community-id> [--limit N]',
+  },
+  {
+    name: 'community-info',
+    cost: '1 call',
+    summary: 'Community metadata: name, description, member/mod counts, rules, topic, creator.',
+    usage: 'xrelay community-info <community-id>',
+  },
 ];
 
 export const commandNames: string[] = COMMANDS.map((c) => c.name);

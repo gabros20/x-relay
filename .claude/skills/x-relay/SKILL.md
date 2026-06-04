@@ -116,6 +116,8 @@ xrelay quoters <id|url> [--limit N]         # tweets quoting a tweet (reactions;
 xrelay trends [--woeid N] [--limit N]       # what's hot now (woeid 1 = worldwide, default)
 xrelay article <id|url>                     # a long-form X Article → Markdown
 xrelay media <id|url> [--out <dir>]         # a tweet's image/video URLs; --out downloads the files
+xrelay community <community-id> [--limit N] # a community's tweet feed (topical, moderated sub-network)
+xrelay community-info <community-id>        # community metadata: name, members, rules, topic, creator
 ```
 
 - **`retweeters`/`followers`/`following`** return `{ users:[<profile>...], nextCursor }` — the
@@ -127,6 +129,11 @@ xrelay media <id|url> [--out <dir>]         # a tweet's image/video URLs; --out 
 - **`article`** returns `{ id, title, markdown, url }` — the full long-form read for a finalist.
 - **`media`** returns `{ tweetId, media:[{type,url,...}], files? }`; `--out <dir>` saves the actual
   image/video files (for OCR / transcription / multimodal analysis).
+- **`community`** returns the community's feed as a normal `{ tweets[], nextCursor }` — a focused,
+  on-topic corpus that's often higher-signal than open search for a niche. **`community-info`** returns
+  `{ name, description, memberCount, moderatorCount, rules[], topic, tags[], creator, url }`. Get the
+  `community-id` from a community URL (`x.com/i/communities/<id>`). Note: X exposes no stable endpoint for
+  a full member roster or within-community search, so those aren't provided — use the feed + `search`.
 
 ---
 

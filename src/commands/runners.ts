@@ -142,6 +142,22 @@ export function runTrends(engine: Engine, opts: { woeid?: number; limit?: number
   );
 }
 
+export function runCommunity(engine: Engine, communityId: string, limit?: number) {
+  if (!communityId)
+    return Promise.resolve(err('community', 'INVALID_INPUT', 'missing community id'));
+  return guard('community', () => engine.community(communityId, lim(limit)));
+}
+
+export function runCommunityInfo(engine: Engine, communityId: string) {
+  if (!communityId)
+    return Promise.resolve(err('community-info', 'INVALID_INPUT', 'missing community id'));
+  return guard('community-info', async () => {
+    const info = await engine.communityInfo(communityId);
+    if (!info) throw new EngineError('NOT_FOUND', 'community not found');
+    return info;
+  });
+}
+
 export function runArticle(engine: Engine, tweetId: string) {
   if (!tweetId) return Promise.resolve(err('article', 'INVALID_INPUT', 'missing tweet id/url'));
   return guard('article', async () => {

@@ -11,6 +11,8 @@ import { z } from 'zod';
 import {
   runArticle,
   runBookmarks,
+  runCommunity,
+  runCommunityInfo,
   runFollowers,
   runFollowing,
   runLikers,
@@ -290,6 +292,23 @@ function buildServer(): McpServer {
     },
     async (a) =>
       wrap(await runMedia(getEngine(), t(a.target), a.outDir ? String(a.outDir) : undefined)),
+  );
+  server.registerTool(
+    'community',
+    {
+      description: "A community's tweet feed (a topical, moderated sub-network).",
+      inputSchema: { communityId: z.string(), limit: N },
+    },
+    async (a) => wrap(await runCommunity(getEngine(), String(a.communityId ?? ''), n(a.limit))),
+  );
+  server.registerTool(
+    'community-info',
+    {
+      description:
+        'Community metadata: name, description, member/mod counts, rules, topic, creator.',
+      inputSchema: { communityId: z.string() },
+    },
+    async (a) => wrap(await runCommunityInfo(getEngine(), String(a.communityId ?? ''))),
   );
 
   return server;

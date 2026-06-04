@@ -36,6 +36,11 @@ export const OPS = {
   Favoriters: { queryId: 'LLkw5EcVutJL6y-2gkz22A', operationName: 'Favoriters' },
   GenericTimelineById: { queryId: '_dGVIf1cY6xFanFNPsAzPQ', operationName: 'GenericTimelineById' },
   TweetResultByRestId: { queryId: 'Xl5pC_lBk_gcO2ItU39DQw', operationName: 'TweetResultByRestId' },
+  CommunityByRestId: { queryId: 'vLS7mhOqMLtGZdXqFP1DEg', operationName: 'CommunityByRestId' },
+  CommunityTweetsTimeline: {
+    queryId: 'pXYASW5kVylF3YMrGJovLg',
+    operationName: 'CommunityTweetsTimeline',
+  },
 } as const satisfies Record<string, { queryId: string; operationName: string }>;
 
 export type OpName = keyof typeof OPS;
@@ -348,6 +353,43 @@ export function tweetResultRequest(params: TweetResultParams): BuiltRequest {
     },
     features: { ...FEATURES, ...ft },
     fieldToggles: { withArticleRichContentState: true, withArticlePlainText: true },
+  };
+}
+
+// --- CommunityByRestId / CommunityTweetsTimeline ----------------------------
+
+export interface CommunityParams extends Overrides {
+  communityId: string;
+}
+
+/** Community metadata (name, description, member counts, rules, creator). */
+export function communityRequest(params: CommunityParams): BuiltRequest {
+  const { communityId, kv, ft } = params;
+  return {
+    variables: { communityId, ...kv },
+    features: { ...FEATURES, ...ft },
+  };
+}
+
+export type CommunityRanking = 'Relevance' | 'Recency';
+
+export interface CommunityTweetsParams extends Overrides {
+  communityId: string;
+  count?: number;
+  cursor?: string;
+  rankingMode?: CommunityRanking;
+}
+
+/** The tweets feed of a community. Defaults to the Relevance ranking X shows on the web. */
+export function communityTweetsRequest(params: CommunityTweetsParams): BuiltRequest {
+  const { communityId, count = 20, cursor, rankingMode = 'Relevance', kv, ft } = params;
+  const variables = withCursor(
+    { communityId, count, displayLocation: 'Community', rankingMode, withCommunity: true },
+    cursor,
+  );
+  return {
+    variables: { ...variables, ...kv },
+    features: { ...FEATURES, ...ft },
   };
 }
 

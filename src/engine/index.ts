@@ -4,6 +4,7 @@
 // command logic stays pure and testable. See docs/ENGINE-RESEARCH.md.
 import type {
   Article,
+  Community,
   MediaItem,
   SearchResult,
   ThreadResult,
@@ -21,6 +22,8 @@ import {
   type OpName,
   type SearchProduct,
   bookmarksRequest,
+  communityRequest,
+  communityTweetsRequest,
   listRequest,
   searchRequest,
   tweetDetailRequest,
@@ -30,7 +33,12 @@ import {
   userMediaRequest,
   userTweetsRequest,
 } from './ops.ts';
-import { extractTweetMedia, parseArticle, parseUserTimeline } from './parse-extra.ts';
+import {
+  extractTweetMedia,
+  parseArticle,
+  parseCommunity,
+  parseUserTimeline,
+} from './parse-extra.ts';
 import { findDict, parseThread, parseTimeline, parseUserResult } from './parse.ts';
 import {
   type SessionSpec,
@@ -105,6 +113,8 @@ export interface Engine {
   trends(opts?: { woeid?: number; limit?: number }): Promise<Trend[]>;
   article(tweetId: string): Promise<Article | null>;
   media(tweetId: string): Promise<MediaItem[]>;
+  community(communityId: string, opts?: PageOpts): Promise<TweetPage>;
+  communityInfo(communityId: string): Promise<Community | null>;
   /** The authenticated user's own @handle (from the session), or null. Memoized. */
   me(): Promise<string | null>;
 }
@@ -497,6 +507,26 @@ export function createEngine(deps: EngineDeps): Engine {
       const value = await call('TweetResultByRestId', tweetResultRequest({ tweetId }));
       const result = findDict(value, 'result', true)[0];
       return extractTweetMedia(result);
+    },
+
+    async community(communityId, opts) {
+      const limit = opts?.limit ?? DEFAULT_LIMIT;
+      return paginate(
+        async (cursor) => {
+          const value = await call(
+            'CommunityTweetsTimeline',
+            communityTweetsRequest({ communityId, cursor }),
+          );
+          return parseTimeline(value);
+        },
+        limit,
+        opts?.stopAtId,
+      );
+    },
+
+    async communityInfo(communityId) {
+      const value = await call('CommunityByRestId', communityRequest({ communityId }));
+      return parseCommunity(value);
     },
   };
 

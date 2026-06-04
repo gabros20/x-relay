@@ -131,3 +131,22 @@ export type Article = {
   url: string;
   author?: Author;
 };
+
+/** An X Community's metadata (the `community-info` command). */
+export type Community = {
+  id: string;
+  name: string;
+  description?: string;
+  memberCount?: number;
+  moderatorCount?: number;
+  /** ISO timestamp (X reports created_at as epoch ms). */
+  createdAt?: string;
+  /** The viewer's role in the community (Member / Moderator / Admin / NonMember). */
+  role?: string;
+  joinPolicy?: string;
+  topic?: string;
+  rules?: string[];
+  tags?: string[];
+  creator?: Author;
+  url: string;
+};

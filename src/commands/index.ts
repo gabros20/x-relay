@@ -17,6 +17,8 @@ export {
   runTrends,
   runArticle,
   runMedia,
+  runCommunity,
+  runCommunityInfo,
   type SearchCommandOpts,
   type UserPostsCommandOpts,
   type CacheViewOpts,

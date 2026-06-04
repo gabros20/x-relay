@@ -221,6 +221,32 @@ describe('errors', () => {
   });
 });
 
+describe('communities', () => {
+  test('community() maps the feed timeline into a TweetPage', async () => {
+    const client = fakeClient({ _start: timeline(['11', '12'], 'cc') });
+    const engine = createEngine({ cookies, client });
+    const res = await engine.community('149', { limit: 2 });
+    expect(res.tweets.map((t) => t.id)).toEqual(['11', '12']);
+    expect(res.nextCursor).toBe('cc');
+  });
+
+  test('communityInfo() normalizes the community result', async () => {
+    const communityJson = {
+      data: {
+        communityResults: {
+          result: { id_str: '149', name: 'Build in Public', member_count: 9 },
+        },
+      },
+    };
+    const client = fakeClient({ _start: communityJson });
+    const engine = createEngine({ cookies, client });
+    const info = await engine.communityInfo('149');
+    expect(info?.name).toBe('Build in Public');
+    expect(info?.memberCount).toBe(9);
+    expect(info?.url).toBe('https://x.com/i/communities/149');
+  });
+});
+
 describe('account pool rotation', () => {
   /** A one-shot client that fails with `code` until exhausted, then serves `value`. */
   function laneClient(
