@@ -32,6 +32,10 @@ export const OPS = {
     queryId: '7UuJsFvnWuZo0HmxrzU42Q',
     operationName: 'ListLatestTweetsTimeline',
   },
+  Retweeters: { queryId: 'TZsWuSj7vGmncVnq7KWDUQ', operationName: 'Retweeters' },
+  Favoriters: { queryId: 'LLkw5EcVutJL6y-2gkz22A', operationName: 'Favoriters' },
+  GenericTimelineById: { queryId: '_dGVIf1cY6xFanFNPsAzPQ', operationName: 'GenericTimelineById' },
+  TweetResultByRestId: { queryId: 'Xl5pC_lBk_gcO2ItU39DQw', operationName: 'TweetResultByRestId' },
 } as const satisfies Record<string, { queryId: string; operationName: string }>;
 
 export type OpName = keyof typeof OPS;
@@ -228,6 +232,122 @@ export function tweetDetailRequest(params: TweetDetailParams): BuiltRequest {
     variables: { ...variables, ...kv },
     features: { ...FEATURES, ...ft },
     fieldToggles: { withArticleRichContentState: false, withArticlePlainText: false },
+  };
+}
+
+// --- UserMedia --------------------------------------------------------------
+
+export interface UserMediaParams extends Overrides {
+  userId: string;
+  count?: number;
+  cursor?: string;
+}
+
+export function userMediaRequest(params: UserMediaParams): BuiltRequest {
+  const { userId, count = 40, cursor, kv, ft } = params;
+  const variables = withCursor(
+    {
+      userId,
+      count,
+      includePromotedContent: false,
+      withClientEventToken: false,
+      withBirdwatchNotes: false,
+      withVoice: true,
+      withV2Timeline: true,
+    },
+    cursor,
+  );
+  return {
+    variables: { ...variables, ...kv },
+    features: { ...FEATURES, ...ft },
+    fieldToggles: { withArticlePlainText: false },
+  };
+}
+
+// --- ListLatestTweetsTimeline -----------------------------------------------
+
+export interface ListParams extends Overrides {
+  listId: string;
+  count?: number;
+  cursor?: string;
+}
+
+export function listRequest(params: ListParams): BuiltRequest {
+  const { listId, count = 40, cursor, kv, ft } = params;
+  const variables = withCursor({ listId, count }, cursor);
+  return {
+    variables: { ...variables, ...kv },
+    features: { ...FEATURES, ...ft },
+    fieldToggles: { withArticleRichContentState: false },
+  };
+}
+
+// --- Followers / Following / Retweeters / Favoriters (user-list timelines) ---
+
+export interface UserListParams extends Overrides {
+  /** userId for Followers/Following; tweetId for Retweeters/Favoriters. */
+  id: string;
+  count?: number;
+  cursor?: string;
+}
+
+/** Shared builder for the user-list timelines. The caller picks the op. */
+export function userListRequest(kind: 'user' | 'tweet', params: UserListParams): BuiltRequest {
+  const { id, count = 20, cursor, kv, ft } = params;
+  const idKey = kind === 'user' ? 'userId' : 'tweetId';
+  const variables = withCursor({ [idKey]: id, count, includePromotedContent: true }, cursor);
+  return {
+    variables: { ...variables, ...kv },
+    features: { ...FEATURES, ...ft },
+  };
+}
+
+// --- GenericTimelineById (trends) -------------------------------------------
+
+/** Stable category timeline tokens (twscrape). The default `trending` covers most cases. */
+export const TREND_TIMELINES: Record<string, string> = {
+  trending: 'VGltZWxpbmU6DAC2CwABAAAACHRyZW5kaW5nAAA',
+  news: 'VGltZWxpbmU6DAC2CwABAAAABG5ld3MAAA',
+  sport: 'VGltZWxpbmU6DAC2CwABAAAABnNwb3J0cwAA',
+  entertainment: 'VGltZWxpbmU6DAC2CwABAAAADWVudGVydGFpbm1lbnQAAA',
+};
+
+export interface TrendsParams extends Overrides {
+  timelineId?: string;
+  count?: number;
+  cursor?: string;
+}
+
+export function trendsRequest(params: TrendsParams = {}): BuiltRequest {
+  const { timelineId = TREND_TIMELINES.trending, count = 20, cursor, kv, ft } = params;
+  const variables = withCursor(
+    { timelineId, count, withQuickPromoteEligibilityTweetFields: true },
+    cursor,
+  );
+  return {
+    variables: { ...variables, ...kv },
+    features: { ...FEATURES, ...ft },
+  };
+}
+
+// --- TweetResultByRestId (article / single tweet w/ rich content) -----------
+
+export interface TweetResultParams extends Overrides {
+  tweetId: string;
+}
+
+export function tweetResultRequest(params: TweetResultParams): BuiltRequest {
+  const { tweetId, kv, ft } = params;
+  return {
+    variables: {
+      tweetId,
+      withCommunity: false,
+      includePromotedContent: false,
+      withVoice: false,
+      ...kv,
+    },
+    features: { ...FEATURES, ...ft },
+    fieldToggles: { withArticleRichContentState: true, withArticlePlainText: true },
   };
 }
 

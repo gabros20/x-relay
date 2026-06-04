@@ -58,6 +58,66 @@ export const COMMANDS: CommandDef[] = [
     summary: 'Pull only NEW bookmarks/posts since the last sync into the local cache.',
     usage: 'xrelay sync bookmarks|posts|all [--handle <you>] [--repair]',
   },
+  {
+    name: 'list',
+    cost: 'medium',
+    summary: 'Tweets from a Twitter List (curated sources).',
+    usage: 'xrelay list <list-id> [--limit N]',
+  },
+  {
+    name: 'user-media',
+    cost: 'medium',
+    summary: "A user's media posts only (images/videos) — visual evidence.",
+    usage: 'xrelay user-media <handle|url> [--limit N]',
+  },
+  {
+    name: 'followers',
+    cost: 'medium',
+    summary: "A user's followers (network mapping).",
+    usage: 'xrelay followers <handle|url> [--limit N]',
+  },
+  {
+    name: 'following',
+    cost: 'medium',
+    summary: 'Who a user follows.',
+    usage: 'xrelay following <handle|url> [--limit N]',
+  },
+  {
+    name: 'retweeters',
+    cost: 'medium',
+    summary: 'Who retweeted a tweet (amplification graph).',
+    usage: 'xrelay retweeters <id|url> [--limit N]',
+  },
+  {
+    name: 'likers',
+    cost: 'medium',
+    summary: 'Who liked a tweet (engagement graph).',
+    usage: 'xrelay likers <id|url> [--limit N]',
+  },
+  {
+    name: 'quoters',
+    cost: 'medium',
+    summary: 'Tweets quoting a tweet (reactions/discourse; recency-windowed).',
+    usage: 'xrelay quoters <id|url> [--limit N]',
+  },
+  {
+    name: 'trends',
+    cost: 'cheap',
+    summary: "What's trending now — a zoomed-out entry point.",
+    usage: 'xrelay trends [--woeid N] [--limit N]   # woeid 1 = worldwide (default)',
+  },
+  {
+    name: 'article',
+    cost: 'medium',
+    summary: 'Fetch a long-form X Article and render it to Markdown.',
+    usage: 'xrelay article <id|url>',
+  },
+  {
+    name: 'media',
+    cost: 'medium',
+    summary: "A tweet's image/video assets (URLs); --out <dir> downloads the files.",
+    usage: 'xrelay media <id|url> [--out <dir>]',
+  },
 ];
 
 export const commandNames: string[] = COMMANDS.map((c) => c.name);

@@ -346,7 +346,12 @@ export function parseTweetResult(result: unknown): Tweet | null {
 // ── Timeline / pagination ───────────────────────────────────────────────────
 
 // Entry-id prefixes that carry tweets we want.
-const TWEET_ENTRY_PREFIXES = ['tweet', 'search-grid', 'profile-conversation'];
+const TWEET_ENTRY_PREFIXES = [
+  'tweet',
+  'search-grid',
+  'profile-conversation',
+  'profile-grid', // UserMedia timeline: a module entry whose items[] hold the tweets
+];
 // Entry-id prefixes we always drop (cursors, ads, recommendations, modules-as-noise).
 const DROP_ENTRY_PREFIXES = ['cursor-', 'promoted', 'who-to-follow', 'module-'];
 

@@ -21,6 +21,18 @@ export {
   runUserPosts,
   runThread,
   runBookmarks,
+  runMyPosts,
+  runSync,
+  runList,
+  runUserMedia,
+  runFollowers,
+  runFollowing,
+  runRetweeters,
+  runLikers,
+  runQuoters,
+  runTrends,
+  runArticle,
+  runMedia,
   buildSearchQuery,
 } from './commands/index.ts';
 export { parseArgs, dispatch, run } from './cli.ts';

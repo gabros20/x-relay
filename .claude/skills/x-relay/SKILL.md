@@ -103,6 +103,31 @@ xrelay sync bookmarks|posts|all [--handle <you>] [--repair] [--max N]
   sync). `posts` auto-detects your handle from the session (override/remember with `--handle`). Returns
   `{ source, added, total, watermark }`.
 
+### More endpoints
+
+```
+xrelay list <list-id> [--limit N]           # tweets from a Twitter List (curated sources)
+xrelay user-media <handle> [--limit N]      # a user's images/videos only (visual evidence)
+xrelay followers <handle> [--limit N]       # a user's followers   (network mapping)
+xrelay following <handle> [--limit N]       # who a user follows
+xrelay retweeters <id|url> [--limit N]      # who retweeted a tweet (amplification graph)
+xrelay likers <id|url> [--limit N]          # who liked a tweet      (engagement graph)
+xrelay quoters <id|url> [--limit N]         # tweets quoting a tweet (reactions; recency-windowed)
+xrelay trends [--woeid N] [--limit N]       # what's hot now (woeid 1 = worldwide, default)
+xrelay article <id|url>                     # a long-form X Article → Markdown
+xrelay media <id|url> [--out <dir>]         # a tweet's image/video URLs; --out downloads the files
+```
+
+- **`retweeters`/`followers`/`following`** return `{ users:[<profile>...], nextCursor }` — the
+  amplification/audience graph. Use them to answer "who is paying attention to / amplifying X".
+- **`likers`** also returns `{ users }`, but X made likes private in 2024, so it's usually **empty** for
+  tweets you don't own (only the like *count* is public — read that from the tweet's `metrics.likes`).
+- **`quoters`** is search-based (`quoted_tweet_id:`), so it's recency-windowed, not the full historical set.
+- **`trends`** is a cheap zoomed-out entry point before drilling into `search`.
+- **`article`** returns `{ id, title, markdown, url }` — the full long-form read for a finalist.
+- **`media`** returns `{ tweetId, media:[{type,url,...}], files? }`; `--out <dir>` saves the actual
+  image/video files (for OCR / transcription / multimodal analysis).
+
 ---
 
 ## Composition notes

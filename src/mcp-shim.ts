@@ -9,12 +9,22 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import {
+  runArticle,
   runBookmarks,
+  runFollowers,
+  runFollowing,
+  runLikers,
+  runList,
+  runMedia,
   runMyPosts,
+  runQuoters,
+  runRetweeters,
   runSearch,
   runSync,
   runThread,
+  runTrends,
   runUser,
+  runUserMedia,
   runUserPosts,
 } from './commands/index.ts';
 import { type Engine, createEngine } from './engine/index.ts';
@@ -199,6 +209,87 @@ function buildServer(): McpServer {
           ...(args.repair ? { repair: true } : {}),
         }),
       ),
+  );
+
+  // ── more read tools ────────────────────────────────────────────────────────
+  const N = z.number().int().positive().optional();
+  const handleIn = { handle: z.string(), limit: N };
+  const tweetIn = { target: z.string().describe('tweet id or status URL'), limit: N };
+  const h = (v: unknown) => extractHandle(String(v ?? '')) ?? String(v ?? '');
+  const t = (v: unknown) => extractTweetId(String(v ?? '')) ?? String(v ?? '');
+  const n = (v: unknown) => (v !== undefined ? Number(v) : undefined);
+
+  server.registerTool(
+    'list',
+    {
+      description: 'Tweets from a Twitter List (curated sources).',
+      inputSchema: { listId: z.string(), limit: N },
+    },
+    async (a) => wrap(await runList(getEngine(), String(a.listId ?? ''), n(a.limit))),
+  );
+  server.registerTool(
+    'user-media',
+    { description: "A user's media posts only (images/videos).", inputSchema: handleIn },
+    async (a) => wrap(await runUserMedia(getEngine(), h(a.handle), n(a.limit))),
+  );
+  server.registerTool(
+    'followers',
+    { description: "A user's followers (network mapping).", inputSchema: handleIn },
+    async (a) => wrap(await runFollowers(getEngine(), h(a.handle), n(a.limit))),
+  );
+  server.registerTool(
+    'following',
+    { description: 'Who a user follows.', inputSchema: handleIn },
+    async (a) => wrap(await runFollowing(getEngine(), h(a.handle), n(a.limit))),
+  );
+  server.registerTool(
+    'retweeters',
+    { description: 'Who retweeted a tweet (amplification graph).', inputSchema: tweetIn },
+    async (a) => wrap(await runRetweeters(getEngine(), t(a.target), n(a.limit))),
+  );
+  server.registerTool(
+    'likers',
+    { description: 'Who liked a tweet (engagement graph).', inputSchema: tweetIn },
+    async (a) => wrap(await runLikers(getEngine(), t(a.target), n(a.limit))),
+  );
+  server.registerTool(
+    'quoters',
+    { description: 'Tweets quoting a tweet (reactions/discourse).', inputSchema: tweetIn },
+    async (a) => wrap(await runQuoters(getEngine(), t(a.target), n(a.limit))),
+  );
+  server.registerTool(
+    'trends',
+    {
+      description: "What's trending now — a zoomed-out entry point.",
+      inputSchema: {
+        woeid: z.number().int().describe('location id; 1 = worldwide (default)').optional(),
+        limit: N,
+      },
+    },
+    async (a) =>
+      wrap(
+        await runTrends(getEngine(), {
+          ...(a.woeid !== undefined ? { woeid: Number(a.woeid) } : {}),
+          ...(a.limit !== undefined ? { limit: Number(a.limit) } : {}),
+        }),
+      ),
+  );
+  server.registerTool(
+    'article',
+    {
+      description: 'Fetch a long-form X Article as Markdown.',
+      inputSchema: { target: z.string() },
+    },
+    async (a) => wrap(await runArticle(getEngine(), t(a.target))),
+  );
+  server.registerTool(
+    'media',
+    {
+      description: "A tweet's image/video assets (URLs); pass outDir to download files.",
+      inputSchema: { target: z.string(), outDir: z.string().optional() },
+    },
+    async (a) =>
+      wrap(await runMedia(getEngine(), t(a.target), a.outDir ? String(a.outDir) : undefined)),
   );
 
   return server;

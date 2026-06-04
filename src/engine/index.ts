@@ -2,7 +2,17 @@
 // generator + auth headers + op config + request driver + parser into the
 // high-level research operations the commands consume. Network lives here so
 // command logic stays pure and testable. See docs/ENGINE-RESEARCH.md.
-import type { SearchResult, ThreadResult, Tweet, TweetPage, UserProfile } from '../types.ts';
+import type {
+  Article,
+  MediaItem,
+  SearchResult,
+  ThreadResult,
+  Trend,
+  Tweet,
+  TweetPage,
+  UserPage,
+  UserProfile,
+} from '../types.ts';
 import { type Cookies, buildHeaders } from './auth.ts';
 import { type ClientResult, type TransactionProvider, createClient } from './client.ts';
 import { getCookies } from './cookies.ts';
@@ -11,11 +21,16 @@ import {
   type OpName,
   type SearchProduct,
   bookmarksRequest,
+  listRequest,
   searchRequest,
   tweetDetailRequest,
+  tweetResultRequest,
   userByScreenNameRequest,
+  userListRequest,
+  userMediaRequest,
   userTweetsRequest,
 } from './ops.ts';
+import { extractTweetMedia, parseArticle, parseUserTimeline } from './parse-extra.ts';
 import { findDict, parseThread, parseTimeline, parseUserResult } from './parse.ts';
 import { ClientTransaction, handleXMigration } from './xctid/index.ts';
 
@@ -71,8 +86,18 @@ export interface Engine {
   search(query: string, opts?: SearchOpts): Promise<SearchResult>;
   user(handle: string): Promise<UserProfile | null>;
   userTweets(handle: string, opts?: UserTweetsOpts): Promise<TweetPage>;
+  userMedia(handle: string, opts?: PageOpts): Promise<TweetPage>;
   bookmarks(opts?: PageOpts): Promise<TweetPage>;
   thread(id: string): Promise<ThreadResult>;
+  list(listId: string, opts?: PageOpts): Promise<TweetPage>;
+  followers(handle: string, opts?: PageOpts): Promise<UserPage>;
+  following(handle: string, opts?: PageOpts): Promise<UserPage>;
+  retweeters(tweetId: string, opts?: PageOpts): Promise<UserPage>;
+  likers(tweetId: string, opts?: PageOpts): Promise<UserPage>;
+  quoters(tweetId: string, opts?: SearchOpts): Promise<SearchResult>;
+  trends(opts?: { woeid?: number; limit?: number }): Promise<Trend[]>;
+  article(tweetId: string): Promise<Article | null>;
+  media(tweetId: string): Promise<MediaItem[]>;
   /** The authenticated user's own @handle (from the session), or null. Memoized. */
   me(): Promise<string | null>;
 }
@@ -156,6 +181,40 @@ async function paginate(
   // When we stopped at the watermark the timeline isn't exhausted, but there's
   // nothing newer to fetch, so we intentionally omit nextCursor.
   if (cursor !== undefined && !reachedWatermark) out.nextCursor = cursor;
+  return out;
+}
+
+/** Follows bottom cursors for a user-list timeline, de-duping by id, up to `limit`. */
+async function paginateUsers(
+  fetchPage: (cursor?: string) => Promise<UserPage>,
+  limit: number,
+): Promise<UserPage> {
+  const users: UserProfile[] = [];
+  const seen = new Set<string>();
+  let cursor: string | undefined;
+  let emptyStreak = 0;
+
+  while (users.length < limit) {
+    const page = await fetchPage(cursor);
+    let fresh = 0;
+    for (const u of page.users) {
+      if (seen.has(u.id)) continue;
+      seen.add(u.id);
+      users.push(u);
+      fresh += 1;
+    }
+    if (fresh === 0) {
+      emptyStreak += 1;
+      if (emptyStreak >= EMPTY_PAGE_TOLERANCE) break;
+    } else {
+      emptyStreak = 0;
+    }
+    if (page.nextCursor === undefined || page.nextCursor === cursor) break;
+    cursor = page.nextCursor;
+  }
+
+  const out: UserPage = { users: users.slice(0, limit) };
+  if (cursor !== undefined) out.nextCursor = cursor;
   return out;
 }
 
@@ -270,5 +329,119 @@ export function createEngine(deps: EngineDeps): Engine {
       const value = await call('TweetDetail', tweetDetailRequest({ focalTweetId: id }));
       return parseThread(value, id);
     },
+
+    async userMedia(handle, opts) {
+      const profile = await getUser(handle);
+      if (!profile) throw new EngineError('NOT_FOUND', `user @${handle} not found`);
+      const limit = opts?.limit ?? DEFAULT_LIMIT;
+      return paginate(
+        async (cursor) => {
+          const value = await call('UserMedia', userMediaRequest({ userId: profile.id, cursor }));
+          return parseTimeline(value);
+        },
+        limit,
+        opts?.stopAtId,
+      );
+    },
+
+    async list(listId, opts) {
+      const limit = opts?.limit ?? DEFAULT_LIMIT;
+      return paginate(
+        async (cursor) => {
+          const value = await call('ListLatestTweetsTimeline', listRequest({ listId, cursor }));
+          return parseTimeline(value);
+        },
+        limit,
+        opts?.stopAtId,
+      );
+    },
+
+    followers(handle, opts) {
+      return usersByHandle('Followers', handle, opts?.limit ?? DEFAULT_LIMIT);
+    },
+
+    following(handle, opts) {
+      return usersByHandle('Following', handle, opts?.limit ?? DEFAULT_LIMIT);
+    },
+
+    retweeters(tweetId, opts) {
+      const limit = opts?.limit ?? DEFAULT_LIMIT;
+      return paginateUsers(async (cursor) => {
+        const value = await call('Retweeters', userListRequest('tweet', { id: tweetId, cursor }));
+        return parseUserTimeline(value);
+      }, limit);
+    },
+
+    likers(tweetId, opts) {
+      const limit = opts?.limit ?? DEFAULT_LIMIT;
+      return paginateUsers(async (cursor) => {
+        const value = await call('Favoriters', userListRequest('tweet', { id: tweetId, cursor }));
+        return parseUserTimeline(value);
+      }, limit);
+    },
+
+    async quoters(tweetId, opts) {
+      // No dedicated op — search for tweets quoting this id (recency-windowed).
+      const limit = opts?.limit ?? DEFAULT_LIMIT;
+      const product: SearchProduct = opts?.product ?? 'Latest';
+      const query = `quoted_tweet_id:${tweetId}`;
+      const page = await paginate(async (cursor) => {
+        const value = await call('SearchTimeline', searchRequest({ query, product, cursor }));
+        return parseTimeline(value);
+      }, limit);
+      const out: SearchResult = { query, product, tweets: page.tweets };
+      if (page.nextCursor !== undefined) out.nextCursor = page.nextCursor;
+      return out;
+    },
+
+    async trends(opts) {
+      // The GraphQL trends timeline rotates its opaque token; the v1.1 REST
+      // endpoint is stable and woeid-targeted (1 = worldwide).
+      const woeid = opts?.woeid ?? 1;
+      const path = '/1.1/trends/place.json';
+      const txid = await txn.provider('GET', path);
+      const res = await fetchImpl(`https://api.x.com${path}?id=${woeid}`, {
+        headers: buildHeaders({ cookies: resolveCookies(), transactionId: txid }),
+      });
+      if (!res.ok) {
+        throw new EngineError('FETCH_FAILED', `trends request failed (${res.status})`, res.status);
+      }
+      const data = (await res.json()) as Array<{
+        trends?: Array<{ name?: string; url?: string; tweet_volume?: number | null }>;
+      }>;
+      const raw = data[0]?.trends ?? [];
+      const out: Trend[] = [];
+      for (let i = 0; i < raw.length; i++) {
+        const tr = raw[i];
+        if (!tr?.name) continue;
+        const trend: Trend = { name: tr.name, rank: i + 1 };
+        if (tr.url) trend.url = tr.url;
+        if (tr.tweet_volume) trend.volume = `${tr.tweet_volume.toLocaleString()} posts`;
+        out.push(trend);
+      }
+      return opts?.limit !== undefined ? out.slice(0, opts.limit) : out;
+    },
+
+    async article(tweetId) {
+      const value = await call('TweetResultByRestId', tweetResultRequest({ tweetId }));
+      return parseArticle(value);
+    },
+
+    async media(tweetId) {
+      const value = await call('TweetResultByRestId', tweetResultRequest({ tweetId }));
+      const result = findDict(value, 'result', true)[0];
+      return extractTweetMedia(result);
+    },
   };
+
+  function usersByHandle(op: OpName, handle: string, limit: number): Promise<UserPage> {
+    return (async () => {
+      const profile = await getUser(handle);
+      if (!profile) throw new EngineError('NOT_FOUND', `user @${handle} not found`);
+      return paginateUsers(async (cursor) => {
+        const value = await call(op, userListRequest('user', { id: profile.id, cursor }));
+        return parseUserTimeline(value);
+      }, limit);
+    })();
+  }
 }

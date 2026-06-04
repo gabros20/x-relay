@@ -96,3 +96,38 @@ export type ThreadResult = {
 };
 
 export type SearchProduct = 'Top' | 'Latest' | 'Media' | 'People';
+
+/** A paginated set of users (followers / following / retweeters / likers). */
+export type UserPage = {
+  users: UserProfile[];
+  nextCursor?: string;
+};
+
+/** A trending topic. */
+export type Trend = {
+  name: string;
+  rank?: number;
+  /** Volume blurb as X reports it, e.g. "42.1K posts". */
+  volume?: string;
+  url?: string;
+};
+
+/** A downloadable media asset attached to a tweet. */
+export type MediaItem = {
+  type: MediaKind;
+  url: string;
+  thumbnail?: string;
+  width?: number;
+  height?: number;
+  durationMs?: number;
+  bitrate?: number;
+};
+
+/** A long-form X Article rendered to Markdown. */
+export type Article = {
+  id: string;
+  title: string;
+  markdown: string;
+  url: string;
+  author?: Author;
+};

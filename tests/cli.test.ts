@@ -1,7 +1,16 @@
 import { describe, expect, test } from 'bun:test';
 import { dispatch, parseArgs } from '../src/cli.ts';
 import type { Engine } from '../src/engine/index.ts';
-import type { SearchResult, ThreadResult, TweetPage, UserProfile } from '../src/types.ts';
+import type {
+  Article,
+  MediaItem,
+  SearchResult,
+  ThreadResult,
+  Trend,
+  TweetPage,
+  UserPage,
+  UserProfile,
+} from '../src/types.ts';
 
 function fakeEngine(calls: string[]): Engine {
   return {
@@ -24,6 +33,46 @@ function fakeEngine(calls: string[]): Engine {
     async thread(id): Promise<ThreadResult> {
       calls.push(`thread:${id}`);
       return { root: {} as never, replies: [] };
+    },
+    async userMedia(handle): Promise<TweetPage> {
+      calls.push(`userMedia:${handle}`);
+      return { tweets: [] };
+    },
+    async list(listId): Promise<TweetPage> {
+      calls.push(`list:${listId}`);
+      return { tweets: [] };
+    },
+    async followers(handle): Promise<UserPage> {
+      calls.push(`followers:${handle}`);
+      return { users: [] };
+    },
+    async following(handle): Promise<UserPage> {
+      calls.push(`following:${handle}`);
+      return { users: [] };
+    },
+    async retweeters(id): Promise<UserPage> {
+      calls.push(`retweeters:${id}`);
+      return { users: [] };
+    },
+    async likers(id): Promise<UserPage> {
+      calls.push(`likers:${id}`);
+      return { users: [] };
+    },
+    async quoters(id): Promise<SearchResult> {
+      calls.push(`quoters:${id}`);
+      return { query: `quoted_tweet_id:${id}`, product: 'Latest', tweets: [] };
+    },
+    async trends(opts): Promise<Trend[]> {
+      calls.push(`trends:${opts?.woeid ?? '-'}`);
+      return [];
+    },
+    async article(id): Promise<Article | null> {
+      calls.push(`article:${id}`);
+      return { id, title: 'T', markdown: '# T', url: `https://x.com/i/status/${id}` };
+    },
+    async media(id): Promise<MediaItem[]> {
+      calls.push(`media:${id}`);
+      return [];
     },
     async me(): Promise<string | null> {
       calls.push('me');
@@ -98,6 +147,25 @@ describe('dispatch', () => {
     const calls: string[] = [];
     await dispatch(parseArgs(['user-posts', 'karpathy', '--replies']), fakeEngine(calls));
     expect(calls[0]).toBe('userTweets:karpathy:true');
+  });
+
+  test('list / trends / article / media / retweeters dispatch with extracted targets', async () => {
+    const calls: string[] = [];
+    const eng = fakeEngine(calls);
+    await dispatch(parseArgs(['list', '1539453138322673664']), eng);
+    await dispatch(parseArgs(['user-media', 'https://x.com/karpathy']), eng);
+    await dispatch(parseArgs(['retweeters', 'https://x.com/x/status/123']), eng);
+    await dispatch(parseArgs(['trends', '--woeid', '23424977']), eng);
+    await dispatch(parseArgs(['article', 'https://x.com/x/status/999']), eng);
+    await dispatch(parseArgs(['media', '777']), eng);
+    expect(calls).toEqual([
+      'list:1539453138322673664',
+      'userMedia:karpathy',
+      'retweeters:123',
+      'trends:23424977',
+      'article:999',
+      'media:777',
+    ]);
   });
 
   test('unknown command yields an error envelope', async () => {

@@ -7,12 +7,22 @@ import type { CacheSort } from './cache/index.ts';
 import {
   type CacheViewOpts,
   type SearchCommandOpts,
+  runArticle,
   runBookmarks,
+  runFollowers,
+  runFollowing,
+  runLikers,
+  runList,
+  runMedia,
   runMyPosts,
+  runQuoters,
+  runRetweeters,
   runSearch,
   runSync,
   runThread,
+  runTrends,
   runUser,
+  runUserMedia,
   runUserPosts,
 } from './commands/index.ts';
 import { COMMANDS, commandNames } from './commands/registry.ts';
@@ -37,6 +47,8 @@ const VALUE_FLAGS = new Set([
   'sort',
   'handle',
   'max',
+  'woeid',
+  'out',
 ]);
 const BOOL_FLAGS = new Set(['replies', 'sync', 'live', 'repair']);
 /** Single-dash aliases. */
@@ -174,6 +186,29 @@ export async function dispatch(parsed: ParsedArgs, engine: Engine): Promise<Enve
         ...(num(parsed, 'max') !== undefined ? { max: num(parsed, 'max') } : {}),
       });
     }
+    case 'list':
+      return runList(engine, target, num(parsed, 'limit'));
+    case 'user-media':
+      return runUserMedia(engine, extractHandle(target) ?? target, num(parsed, 'limit'));
+    case 'followers':
+      return runFollowers(engine, extractHandle(target) ?? target, num(parsed, 'limit'));
+    case 'following':
+      return runFollowing(engine, extractHandle(target) ?? target, num(parsed, 'limit'));
+    case 'retweeters':
+      return runRetweeters(engine, extractTweetId(target) ?? target, num(parsed, 'limit'));
+    case 'likers':
+      return runLikers(engine, extractTweetId(target) ?? target, num(parsed, 'limit'));
+    case 'quoters':
+      return runQuoters(engine, extractTweetId(target) ?? target, num(parsed, 'limit'));
+    case 'trends':
+      return runTrends(engine, {
+        ...(num(parsed, 'woeid') !== undefined ? { woeid: num(parsed, 'woeid') } : {}),
+        ...(num(parsed, 'limit') !== undefined ? { limit: num(parsed, 'limit') } : {}),
+      });
+    case 'article':
+      return runArticle(engine, extractTweetId(target) ?? target);
+    case 'media':
+      return runMedia(engine, extractTweetId(target) ?? target, first(parsed, 'out'));
     default:
       return err('cli', 'UNKNOWN_COMMAND', `unknown command: ${command ?? '(none)'}`);
   }
