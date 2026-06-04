@@ -220,3 +220,66 @@ describe('errors', () => {
     await expect(engine.search('x', { limit: 1 })).rejects.toThrow(EngineError);
   });
 });
+
+describe('account pool rotation', () => {
+  /** A one-shot client that fails with `code` until exhausted, then serves `value`. */
+  function laneClient(
+    code: string | null,
+    value: unknown,
+    log: string[],
+    name: string,
+  ): EngineClient {
+    return {
+      get: async () => {
+        log.push(name);
+        if (code !== null) return { ok: false, error: { code, message: name } };
+        return { ok: true, value };
+      },
+    };
+  }
+
+  test('rotates to the next lane on RATE_LIMITED and returns its result', async () => {
+    const log: string[] = [];
+    const clients = [
+      laneClient('RATE_LIMITED', null, log, 'a'),
+      laneClient(null, timeline(['9']), log, 'b'),
+    ];
+    const engine = createEngine({ cookies, clients, sleep: async () => {} });
+    const res = await engine.search('x', { limit: 1 });
+    expect(res.tweets.map((t) => t.id)).toEqual(['9']);
+    expect(log).toEqual(['a', 'b']);
+  });
+
+  test('rotates on AUTH_FAILED (an expired account) to a healthy one', async () => {
+    const log: string[] = [];
+    const clients = [
+      laneClient('AUTH_FAILED', null, log, 'a'),
+      laneClient(null, timeline(['7']), log, 'b'),
+    ];
+    const engine = createEngine({ cookies, clients, sleep: async () => {} });
+    const res = await engine.search('x', { limit: 1 });
+    expect(res.tweets.map((t) => t.id)).toEqual(['7']);
+  });
+
+  test('throws when every lane is rate-limited', async () => {
+    const log: string[] = [];
+    const clients = [
+      laneClient('RATE_LIMITED', null, log, 'a'),
+      laneClient('RATE_LIMITED', null, log, 'b'),
+    ];
+    const engine = createEngine({ cookies, clients, sleep: async () => {} });
+    await expect(engine.search('x', { limit: 1 })).rejects.toThrow(EngineError);
+    expect(log).toEqual(['a', 'b']);
+  });
+
+  test('does not rotate on a non-throttle error (fails fast on the first lane)', async () => {
+    const log: string[] = [];
+    const clients = [
+      laneClient('FETCH_FAILED', null, log, 'a'),
+      laneClient(null, timeline(['1']), log, 'b'),
+    ];
+    const engine = createEngine({ cookies, clients, sleep: async () => {} });
+    await expect(engine.search('x', { limit: 1 })).rejects.toThrow(EngineError);
+    expect(log).toEqual(['a']);
+  });
+});

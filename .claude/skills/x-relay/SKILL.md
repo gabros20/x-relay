@@ -154,3 +154,28 @@ npm i -g x-relay-mcp
 ```
 Cookies are read automatically from your logged-in browser (macOS Keychain). The first run may show a one-time
 Keychain "Always Allow" prompt. Assumes a residential IP (run locally); datacenter IPs are blocked by X.
+
+### Account pool + proxy (optional — for heavy/sustained use)
+
+X rate-limits per account and blocks datacenter IPs. For deep sweeps, give the tool **several sessions, each
+behind its own residential proxy**; it transparently fails over to the next session when one hits a rate-limit
+(429) or its cookies expire — so a long research run survives a single account getting throttled. All optional;
+the default single-browser-session path needs none of this.
+
+```
+# Several accounts, each pinned to its own proxy (JSON array — the robust form):
+export XRELAY_ACCOUNTS='[
+  {"cookies":"auth_token=..; ct0=..","proxy":"http://user:pass@host1:port","label":"main"},
+  {"cookies":"auth_token=..; ct0=..","proxy":"socks5://user:pass@host2:port"}
+]'
+
+# Or a simpler newline list of cookie strings, with proxies round-robined onto them:
+export XRELAY_ACCOUNTS=$'auth_token=..; ct0=..\nauth_token=..; ct0=..'
+export XRELAY_PROXIES='http://host1:port, http://host2:port'
+
+# Single browser session, just routed through one proxy:
+export XRELAY_PROXY='http://user:pass@host:port'
+```
+
+Rotation triggers on `RATE_LIMITED` / `AUTH_FAILED` only; other errors fail fast. Pair an equal number of
+accounts and proxies for a clean 1:1 mapping. http(s) and socks proxies are both supported.

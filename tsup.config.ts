@@ -18,6 +18,9 @@ export default defineConfig({
   splitting: false,
   sourcemap: true,
   outDir: 'dist',
+  // undici is loaded lazily (only when a proxy is configured) and is a runtime
+  // dependency — keep it external so it resolves from node_modules, not bundled.
+  external: ['undici'],
   async onSuccess() {
     // Add the shebang to the executable entry points so the global bins run.
     for (const file of ['dist/cli.js', 'dist/mcp-shim.js']) {
