@@ -1,3 +1,10 @@
+# [1.2.0](https://github.com/gabros20/x-relay/compare/v1.1.0...v1.2.0) (2026-06-04)
+
+
+### Features
+
+* add 10 read endpoints (timelines, engagement graph, trends, article, media) ([cd23305](https://github.com/gabros20/x-relay/commit/cd2330590581e97b43bf1a930c8cea84f7166dc8))
+
 # [1.1.0](https://github.com/gabros20/x-relay/compare/v1.0.0...v1.1.0) (2026-06-04)
 
 
