@@ -1,3 +1,10 @@
+# [1.1.0](https://github.com/gabros20/x-relay/compare/v1.0.0...v1.1.0) (2026-06-04)
+
+
+### Features
+
+* **engine:** cold-start retry hardening + me() handle auto-detect ([9cbab77](https://github.com/gabros20/x-relay/commit/9cbab77a1554111ba2fe8304676f22cacf48a315))
+
 # 1.0.0 (2026-06-04)
 
 
