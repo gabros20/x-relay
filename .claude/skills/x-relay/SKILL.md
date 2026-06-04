@@ -100,7 +100,8 @@ xrelay sync bookmarks|posts|all [--handle <you>] [--repair] [--max N]
 ```
 - Pulls ONLY tweets newer than the last sync (snowflake-id watermark + newest-first early-break) — never a
   full refetch. `--repair` refetches everything and patches records; `--max N` caps a run (good for a first
-  sync). `posts` needs your `--handle` once (it's remembered). Returns `{ source, added, total, watermark }`.
+  sync). `posts` auto-detects your handle from the session (override/remember with `--handle`). Returns
+  `{ source, added, total, watermark }`.
 
 ---
 
