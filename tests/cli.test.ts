@@ -25,6 +25,10 @@ function fakeEngine(calls: string[]): Engine {
       calls.push(`thread:${id}`);
       return { root: {} as never, replies: [] };
     },
+    async me(): Promise<string | null> {
+      calls.push('me');
+      return 'me';
+    },
   };
 }
 

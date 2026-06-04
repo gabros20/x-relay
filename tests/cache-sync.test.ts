@@ -3,7 +3,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadCache } from '../src/cache/store.ts';
-import { syncBookmarks } from '../src/cache/sync.ts';
+import { syncBookmarks, syncPosts } from '../src/cache/sync.ts';
 import type { Engine } from '../src/engine/index.ts';
 import type { Tweet, TweetPage } from '../src/types.ts';
 
@@ -17,18 +17,27 @@ function tweet(id: string): Tweet {
   };
 }
 
-/** A fake whose bookmark timeline is newest-first and honors stopAtId. */
-function fakeEngine(ids: string[]): Engine {
+/** A fake whose newest-first timelines honor stopAtId; `handle` is what me() returns. */
+function fakeEngine(ids: string[], handle?: string): Engine {
+  const page = (opts: { stopAtId?: string; limit?: number } | undefined): TweetPage => {
+    const stop = opts?.stopAtId;
+    const out: Tweet[] = [];
+    for (const id of ids) {
+      if (stop !== undefined && BigInt(id) <= BigInt(stop)) break;
+      out.push(tweet(id));
+      if (opts?.limit !== undefined && out.length >= opts.limit) break;
+    }
+    return { tweets: out };
+  };
   return {
     async bookmarks(opts): Promise<TweetPage> {
-      const stop = opts?.stopAtId;
-      const out: Tweet[] = [];
-      for (const id of ids) {
-        if (stop !== undefined && BigInt(id) <= BigInt(stop)) break;
-        out.push(tweet(id));
-        if (opts?.limit !== undefined && out.length >= opts.limit) break;
-      }
-      return { tweets: out };
+      return page(opts);
+    },
+    async userTweets(_handle, opts): Promise<TweetPage> {
+      return page(opts);
+    },
+    async me(): Promise<string | null> {
+      return handle ?? null;
     },
   } as unknown as Engine;
 }
@@ -61,5 +70,23 @@ describe('syncBookmarks (incremental)', () => {
     const r = await syncBookmarks(fakeEngine(['5', '4', '3']), { dir });
     expect(r.added).toBe(0);
     expect(r.total).toBe(3);
+  });
+});
+
+describe('syncPosts (handle auto-detect)', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'xrelay-posts-'));
+  });
+
+  test('auto-detects the handle via me() when none is passed, and remembers it', async () => {
+    const r = await syncPosts(fakeEngine(['9', '8'], 'gabros20'), undefined, { dir });
+    expect(r.handle).toBe('gabros20');
+    expect(r.added).toBe(2);
+    expect(loadCache('posts', dir).handle).toBe('gabros20');
+  });
+
+  test('rejects when no handle is given and me() returns null', async () => {
+    await expect(syncPosts(fakeEngine(['9'], undefined), undefined, { dir })).rejects.toThrow();
   });
 });

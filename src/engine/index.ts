@@ -3,7 +3,7 @@
 // high-level research operations the commands consume. Network lives here so
 // command logic stays pure and testable. See docs/ENGINE-RESEARCH.md.
 import type { SearchResult, ThreadResult, Tweet, TweetPage, UserProfile } from '../types.ts';
-import type { Cookies } from './auth.ts';
+import { type Cookies, buildHeaders } from './auth.ts';
 import { type ClientResult, type TransactionProvider, createClient } from './client.ts';
 import { getCookies } from './cookies.ts';
 import {
@@ -73,17 +73,25 @@ export interface Engine {
   userTweets(handle: string, opts?: UserTweetsOpts): Promise<TweetPage>;
   bookmarks(opts?: PageOpts): Promise<TweetPage>;
   thread(id: string): Promise<ThreadResult>;
+  /** The authenticated user's own @handle (from the session), or null. Memoized. */
+  me(): Promise<string | null>;
 }
 
 export interface EngineDeps {
   /** Cookies for auth. Omit to auto-extract from the local browser (getCookies). */
   cookies?: Cookies;
   fetchImpl?: typeof fetch;
+  /** Backoff between cold-start retries. Injectable (tests pass a no-op). */
+  sleep?: (ms: number) => Promise<void>;
   /** Injectable transport (tests). Defaults to a real client over the X API. */
   client?: EngineClient;
   /** Injectable transaction provider (tests). Defaults to the xctid generator. */
   transaction?: TransactionProvider;
 }
+
+/** A fresh transaction-id + the homepage bundle can transiently 404; retry this many times. */
+const MAX_NOTFOUND_RETRIES = 2;
+const RETRY_BACKOFF_MS = 400;
 
 /** A lazy x-client-transaction-id provider that (re)initializes from the X homepage. */
 function createTransactionProvider(fetchImpl?: typeof fetch): {
@@ -152,31 +160,61 @@ async function paginate(
 }
 
 export function createEngine(deps: EngineDeps): Engine {
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const txn = deps.transaction
     ? { provider: deps.transaction, refresh: async () => {} }
     : createTransactionProvider(deps.fetchImpl);
 
-  // Resolve cookies only when we actually build a network client (auto-extract
-  // from the browser if none were passed); a test-injected client needs none.
+  // Resolve cookies lazily (auto-extract from the browser) the first time the
+  // network actually needs them; a test-injected client needs none.
+  let cookiesCache = deps.cookies;
+  const resolveCookies = (): Cookies => {
+    if (cookiesCache === undefined) cookiesCache = getCookies();
+    return cookiesCache;
+  };
+
   const client: EngineClient =
     deps.client ??
     createClient({
-      cookies: deps.cookies ?? getCookies(),
+      cookies: resolveCookies(),
       transaction: txn.provider,
       ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
     });
 
-  // Runs a request; on a stale-transaction-id NOT_FOUND, refreshes the generator
-  // once and retries (the bundle may have rotated). Other errors throw.
-  async function call(op: OpName, request: BuiltRequest, retried = false): Promise<unknown> {
+  // Runs a request; on a stale-transaction-id NOT_FOUND (cold start / rotated
+  // bundle), refreshes the generator and retries a few times with backoff.
+  async function call(op: OpName, request: BuiltRequest, attempt = 0): Promise<unknown> {
     const res = await client.get(op, request);
     if (res.ok) return res.value;
-    if (res.error.code === 'NOT_FOUND' && !retried) {
+    if (res.error.code === 'NOT_FOUND' && attempt < MAX_NOTFOUND_RETRIES) {
       await txn.refresh();
-      return call(op, request, true);
+      await sleep(RETRY_BACKOFF_MS * (attempt + 1));
+      return call(op, request, attempt + 1);
     }
     throw new EngineError(res.error.code, res.error.message, res.error.status);
   }
+
+  // The authenticated user's @handle, via the v1.1 settings endpoint. Memoized.
+  let mePromise: Promise<string | null> | undefined;
+  async function fetchMe(): Promise<string | null> {
+    const path = '/1.1/account/settings.json';
+    try {
+      const txid = await txn.provider('GET', path);
+      const res = await fetchImpl(`https://api.x.com${path}`, {
+        headers: buildHeaders({ cookies: resolveCookies(), transactionId: txid }),
+      });
+      if (!res.ok) return null;
+      const data = (await res.json()) as { screen_name?: string };
+      return data.screen_name ?? null;
+    } catch {
+      return null;
+    }
+  }
+  const me = (): Promise<string | null> => {
+    if (mePromise === undefined) mePromise = fetchMe();
+    return mePromise;
+  };
 
   async function getUser(handle: string): Promise<UserProfile | null> {
     const value = await call('UserByScreenName', userByScreenNameRequest({ screenName: handle }));
@@ -185,6 +223,8 @@ export function createEngine(deps: EngineDeps): Engine {
   }
 
   return {
+    me,
+
     async search(query, opts) {
       const product: SearchProduct = opts?.product ?? 'Top';
       const limit = opts?.limit ?? DEFAULT_LIMIT;

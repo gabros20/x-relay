@@ -152,14 +152,14 @@ export function runMyPosts(
   opts: MyPostsOpts = {},
 ): Promise<Envelope<CacheView | TweetPage>> {
   if (opts.live) {
-    if (!opts.handle) {
-      return Promise.resolve(err('my-posts', 'INVALID_INPUT', '--live needs --handle <you>'));
-    }
-    return guard('my-posts', () =>
-      engine.userTweets(opts.handle as string, {
+    return guard('my-posts', async () => {
+      const handle = opts.handle ?? (await engine.me());
+      if (!handle)
+        throw new EngineError('INVALID_INPUT', 'could not determine your handle — pass --handle');
+      return engine.userTweets(handle, {
         ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
-      }),
-    );
+      });
+    });
   }
   return guard('my-posts', async () => {
     let added: number | undefined;
@@ -182,7 +182,7 @@ function viewCache(source: CacheSource, opts: CacheViewOpts, added?: number): Ca
   if (file.syncedAt !== undefined) view.syncedAt = file.syncedAt;
   if (added !== undefined) view.added = added;
   if (total === 0) {
-    view.hint = `cache is empty — run \`xrelay sync ${source}${source === 'posts' ? ' --handle <you>' : ''}\` first (or pass --live).`;
+    view.hint = `cache is empty — run \`xrelay sync ${source}\` first (or pass --live).`;
   }
   return view;
 }

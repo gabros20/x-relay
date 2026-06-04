@@ -185,6 +185,32 @@ describe('bookmarks incremental (stopAtId)', () => {
   });
 });
 
+describe('cold-start resilience', () => {
+  test('retries a transient NOT_FOUND (refresh + backoff) then succeeds', async () => {
+    let calls = 0;
+    const client: EngineClient = {
+      get: async () => {
+        calls += 1;
+        if (calls <= 2)
+          return { ok: false, error: { code: 'NOT_FOUND', status: 404, message: 'x' } };
+        return { ok: true, value: timeline(['1']) };
+      },
+    };
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    const res = await engine.search('x', { limit: 1 });
+    expect(res.tweets.map((t) => t.id)).toEqual(['1']);
+    expect(calls).toBe(3);
+  });
+
+  test('gives up after the NOT_FOUND retry budget', async () => {
+    const client: EngineClient = {
+      get: async () => ({ ok: false, error: { code: 'NOT_FOUND', status: 404, message: 'x' } }),
+    };
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    await expect(engine.search('x', { limit: 1 })).rejects.toThrow(EngineError);
+  });
+});
+
 describe('errors', () => {
   test('throws EngineError carrying the client error code', async () => {
     const client: EngineClient = {

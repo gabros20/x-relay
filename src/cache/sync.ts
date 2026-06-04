@@ -54,19 +54,20 @@ export function syncBookmarks(engine: Engine, opts: SyncOpts = {}): Promise<Sync
   );
 }
 
-export function syncPosts(
+export async function syncPosts(
   engine: Engine,
   handle: string | undefined,
   opts: SyncOpts = {},
 ): Promise<SyncResult> {
   const file = loadCache('posts', opts.dir);
-  if (handle) file.handle = handle;
-  const h = file.handle;
+  // Prefer an explicit handle, then the remembered one, then auto-detect from the session.
+  const h = handle ?? file.handle ?? (await engine.me()) ?? undefined;
   if (!h) {
-    return Promise.reject(
-      new Error('posts sync needs your handle once: `xrelay sync posts --handle <you>`'),
+    throw new Error(
+      "couldn't determine your handle — pass `--handle <you>` (auto-detect needs a valid session)",
     );
   }
+  file.handle = h;
   return syncInto(
     file,
     (limit, stopAtId) =>
