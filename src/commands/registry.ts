@@ -39,9 +39,24 @@ export const COMMANDS: CommandDef[] = [
   },
   {
     name: 'bookmarks',
-    cost: 'medium',
-    summary: 'Your saved posts (live). A local cached index lands in a later phase.',
-    usage: 'xrelay bookmarks [--limit N]',
+    cost: 'cheap — local cache',
+    summary: 'Search your saved posts in the local cache. --sync to refresh, --live to hit X.',
+    usage:
+      'xrelay bookmarks [-q "<query>"] [--limit N] [--sort relevance|newest|likes|views|bookmarks]\n' +
+      '       [--sync] [--repair] [--live]',
+  },
+  {
+    name: 'my-posts',
+    cost: 'cheap — local cache',
+    summary: 'Search your own posts in the local cache. --sync to refresh, --live to hit X.',
+    usage:
+      'xrelay my-posts [-q "<query>"] [--limit N] [--sort ...] [--handle <you>] [--sync] [--live]',
+  },
+  {
+    name: 'sync',
+    cost: 'medium — incremental',
+    summary: 'Pull only NEW bookmarks/posts since the last sync into the local cache.',
+    usage: 'xrelay sync bookmarks|posts|all [--handle <you>] [--repair]',
   },
 ];
 

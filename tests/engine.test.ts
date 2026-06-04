@@ -172,6 +172,19 @@ describe('thread', () => {
   });
 });
 
+describe('bookmarks incremental (stopAtId)', () => {
+  test('stops at the watermark id and omits the cursor (nothing newer left)', async () => {
+    const client = fakeClient({
+      _start: timeline(['10', '9', '8'], 'c1'),
+      c1: timeline(['7', '6'], 'c2'),
+    });
+    const engine = createEngine({ cookies, client });
+    const res = await engine.bookmarks({ limit: 50, stopAtId: '8' });
+    expect(res.tweets.map((t) => t.id)).toEqual(['10', '9']);
+    expect(res.nextCursor).toBeUndefined();
+  });
+});
+
 describe('errors', () => {
   test('throws EngineError carrying the client error code', async () => {
     const client: EngineClient = {

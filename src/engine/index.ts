@@ -48,10 +48,23 @@ export interface SearchOpts {
 export interface UserTweetsOpts {
   replies?: boolean;
   limit?: number;
+  /** Stop paginating once a tweet with id <= this is seen (incremental sync watermark). */
+  stopAtId?: string;
 }
 
 export interface PageOpts {
   limit?: number;
+  /** Stop paginating once a tweet with id <= this is seen (incremental sync watermark). */
+  stopAtId?: string;
+}
+
+/** Snowflake ids are time-ordered; compare as BigInt, falling back to string length/compare. */
+function idLte(a: string, b: string): boolean {
+  try {
+    return BigInt(a) <= BigInt(b);
+  } catch {
+    return a.length === b.length ? a <= b : a.length < b.length;
+  }
 }
 
 export interface Engine {
@@ -93,26 +106,33 @@ function createTransactionProvider(fetchImpl?: typeof fetch): {
   };
 }
 
-/** Follows bottom cursors, de-duping by id, until `limit` or the timeline is exhausted. */
+/** Follows bottom cursors, de-duping by id, until `limit`, `stopAtId`, or exhaustion. */
 async function paginate(
   fetchPage: (cursor?: string) => Promise<TweetPage>,
   limit: number,
+  stopAtId?: string,
 ): Promise<TweetPage> {
   const tweets: Tweet[] = [];
   const seen = new Set<string>();
   let cursor: string | undefined;
   let emptyStreak = 0;
+  let reachedWatermark = false;
 
-  while (tweets.length < limit) {
+  while (tweets.length < limit && !reachedWatermark) {
     const page = await fetchPage(cursor);
     let fresh = 0;
     for (const t of page.tweets) {
+      if (stopAtId !== undefined && idLte(t.id, stopAtId)) {
+        reachedWatermark = true;
+        break;
+      }
       if (seen.has(t.id)) continue;
       seen.add(t.id);
       tweets.push(t);
       fresh += 1;
     }
 
+    if (reachedWatermark) break;
     if (fresh === 0) {
       emptyStreak += 1;
       if (emptyStreak >= EMPTY_PAGE_TOLERANCE) break;
@@ -125,7 +145,9 @@ async function paginate(
   }
 
   const out: TweetPage = { tweets: tweets.slice(0, limit) };
-  if (cursor !== undefined) out.nextCursor = cursor;
+  // When we stopped at the watermark the timeline isn't exhausted, but there's
+  // nothing newer to fetch, so we intentionally omit nextCursor.
+  if (cursor !== undefined && !reachedWatermark) out.nextCursor = cursor;
   return out;
 }
 
@@ -181,19 +203,27 @@ export function createEngine(deps: EngineDeps): Engine {
       const profile = await getUser(handle);
       if (!profile) throw new EngineError('NOT_FOUND', `user @${handle} not found`);
       const limit = opts?.limit ?? DEFAULT_LIMIT;
-      return paginate(async (cursor) => {
-        const req = userTweetsRequest({ userId: profile.id, replies: opts?.replies, cursor });
-        const value = await call(req.op, req);
-        return parseTimeline(value);
-      }, limit);
+      return paginate(
+        async (cursor) => {
+          const req = userTweetsRequest({ userId: profile.id, replies: opts?.replies, cursor });
+          const value = await call(req.op, req);
+          return parseTimeline(value);
+        },
+        limit,
+        opts?.stopAtId,
+      );
     },
 
     async bookmarks(opts) {
       const limit = opts?.limit ?? DEFAULT_LIMIT;
-      return paginate(async (cursor) => {
-        const value = await call('Bookmarks', bookmarksRequest({ cursor }));
-        return parseTimeline(value);
-      }, limit);
+      return paginate(
+        async (cursor) => {
+          const value = await call('Bookmarks', bookmarksRequest({ cursor }));
+          return parseTimeline(value);
+        },
+        limit,
+        opts?.stopAtId,
+      );
     },
 
     async thread(id) {

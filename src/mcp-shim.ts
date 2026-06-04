@@ -8,7 +8,15 @@ import { fileURLToPath } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { runBookmarks, runSearch, runThread, runUser, runUserPosts } from './commands/index.ts';
+import {
+  runBookmarks,
+  runMyPosts,
+  runSearch,
+  runSync,
+  runThread,
+  runUser,
+  runUserPosts,
+} from './commands/index.ts';
 import { type Engine, createEngine } from './engine/index.ts';
 import type { SearchProduct } from './engine/ops.ts';
 import { extractHandle, extractTweetId } from './ids.ts';
@@ -122,16 +130,73 @@ function buildServer(): McpServer {
       ),
   );
 
+  const SORT = z.enum(['relevance', 'newest', 'oldest', 'likes', 'views', 'bookmarks']);
+  const cacheInput = {
+    query: z.string().describe('keyword filter over the local cache').optional(),
+    limit: z.number().int().positive().optional(),
+    sort: SORT.optional(),
+    sync: z.boolean().describe('refresh the cache (incremental) before reading').optional(),
+    live: z.boolean().describe('hit X directly, bypassing the cache').optional(),
+    repair: z.boolean().optional(),
+  };
+
   server.registerTool(
     'bookmarks',
     {
-      description: 'Your saved posts (live).',
-      inputSchema: { limit: z.number().int().positive().optional() },
+      description:
+        'Search YOUR saved posts in the local cache (offline, instant). --sync refreshes only new ones; --live hits X.',
+      inputSchema: cacheInput,
     },
     async (args) =>
       wrap(
         await runBookmarks(getEngine(), {
+          ...(args.query ? { query: String(args.query) } : {}),
           ...(args.limit !== undefined ? { limit: Number(args.limit) } : {}),
+          ...(args.sort ? { sort: args.sort as never } : {}),
+          ...(args.sync ? { sync: true } : {}),
+          ...(args.live ? { live: true } : {}),
+          ...(args.repair ? { repair: true } : {}),
+        }),
+      ),
+  );
+
+  server.registerTool(
+    'my-posts',
+    {
+      description:
+        'Search YOUR own posts in the local cache. --sync refreshes; --live needs handle.',
+      inputSchema: { ...cacheInput, handle: z.string().describe('your @handle').optional() },
+    },
+    async (args) =>
+      wrap(
+        await runMyPosts(getEngine(), {
+          ...(args.query ? { query: String(args.query) } : {}),
+          ...(args.limit !== undefined ? { limit: Number(args.limit) } : {}),
+          ...(args.sort ? { sort: args.sort as never } : {}),
+          ...(args.sync ? { sync: true } : {}),
+          ...(args.live ? { live: true } : {}),
+          ...(args.repair ? { repair: true } : {}),
+          ...(args.handle ? { handle: String(args.handle) } : {}),
+        }),
+      ),
+  );
+
+  server.registerTool(
+    'sync',
+    {
+      description: 'Pull only NEW bookmarks/posts since the last sync into the local cache.',
+      inputSchema: {
+        source: z.enum(['bookmarks', 'posts', 'all']),
+        handle: z.string().describe('your @handle (required for posts)').optional(),
+        repair: z.boolean().optional(),
+      },
+    },
+    async (args) =>
+      wrap(
+        await runSync(getEngine(), {
+          source: (args.source as 'bookmarks' | 'posts' | 'all') ?? 'bookmarks',
+          ...(args.handle ? { handle: String(args.handle) } : {}),
+          ...(args.repair ? { repair: true } : {}),
         }),
       ),
   );

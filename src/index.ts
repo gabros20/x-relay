@@ -24,3 +24,14 @@ export {
   buildSearchQuery,
 } from './commands/index.ts';
 export { parseArgs, dispatch, run } from './cli.ts';
+export {
+  type CacheSource,
+  type CacheFile,
+  type CacheSort,
+  type SyncResult,
+  loadCache,
+  saveCache,
+  searchCache,
+  syncBookmarks,
+  syncPosts,
+} from './cache/index.ts';

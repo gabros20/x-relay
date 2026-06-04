@@ -37,8 +37,10 @@ GATE 2 — enrich the authors (1 CALL each: user)
 GATE 3 — full read (EXPENSIVE: thread — only the few that survive)
   xrelay thread <id|url>      # the tweet + its replies/conversation
 
-Cross-source: your own saved material is a parallel input —
-  xrelay bookmarks --limit 50    # fuse what you've already saved with live results
+Cross-source: your own saved material is a parallel input (a LOCAL cache —
+offline, instant, no rate limits) —
+  xrelay bookmarks -q "<topic>"   # fuse what you've already saved with live results
+  xrelay my-posts -q "<topic>"    # and what you've written
 ```
 
 `--product Top` ranks by X's own engagement model (best for "the best on <topic>"); `--product Latest`
@@ -81,11 +83,24 @@ xrelay thread <id|url>
 ```
 - Returns `{ root: <tweet>, replies: [<tweet>...], nextCursor }`. Use on finalists only.
 
-### `bookmarks` — COST: medium. Your saved posts.
+### `bookmarks` / `my-posts` — COST: cheap. Your local cache (offline, instant).
 ```
-xrelay bookmarks [--limit N]
+xrelay bookmarks [-q "<query>"] [--limit N] [--sort relevance|newest|likes|views|bookmarks]
+       [--sync] [--repair] [--live]
+xrelay my-posts  [-q "<query>"] [--limit N] [--sort ...] [--handle <you>] [--sync] [--live]
 ```
-- Returns `{ tweets[], nextCursor }` of your saved posts. (A local, incrementally-synced cache lands later.)
+- Search YOUR saved posts / own posts in a local cache — no rate limits, instant, semantic-free keyword +
+  metadata ranking. Returns `{ source, cached, total, syncedAt, tweets[] }`.
+- `--sync` refreshes the cache first (incremental — only new since last sync). `--live` bypasses the cache and
+  hits X. If the cache is empty, the result carries a `hint` telling you to `sync` first.
+
+### `sync` — COST: medium. Refresh the local cache (incremental).
+```
+xrelay sync bookmarks|posts|all [--handle <you>] [--repair] [--max N]
+```
+- Pulls ONLY tweets newer than the last sync (snowflake-id watermark + newest-first early-break) — never a
+  full refetch. `--repair` refetches everything and patches records; `--max N` caps a run (good for a first
+  sync). `posts` needs your `--handle` once (it's remembered). Returns `{ source, added, total, watermark }`.
 
 ---
 

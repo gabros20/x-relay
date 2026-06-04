@@ -3,10 +3,14 @@
 // Parses args, dispatches a command against the Engine, prints a JSON envelope
 // to stdout. Errors print an error envelope to stdout and exit non-zero.
 import { fileURLToPath } from 'node:url';
+import type { CacheSort } from './cache/index.ts';
 import {
+  type CacheViewOpts,
   type SearchCommandOpts,
   runBookmarks,
+  runMyPosts,
   runSearch,
+  runSync,
   runThread,
   runUser,
   runUserPosts,
@@ -29,8 +33,14 @@ const VALUE_FLAGS = new Set([
   'min-faves',
   'min-retweets',
   'filter',
+  'query',
+  'sort',
+  'handle',
+  'max',
 ]);
-const BOOL_FLAGS = new Set(['replies']);
+const BOOL_FLAGS = new Set(['replies', 'sync', 'live', 'repair']);
+/** Single-dash aliases. */
+const SHORT_FLAGS: Record<string, string> = { q: 'query' };
 
 export interface ParsedArgs {
   command?: string;
@@ -48,8 +58,12 @@ export function parseArgs(argv: string[]): ParsedArgs {
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i];
     if (token === undefined) continue;
-    if (token.startsWith('--')) {
-      const name = token.slice(2);
+    const name = token.startsWith('--')
+      ? token.slice(2)
+      : token.startsWith('-') && token.length > 1
+        ? SHORT_FLAGS[token.slice(1)]
+        : undefined;
+    if (name !== undefined) {
       if (BOOL_FLAGS.has(name)) {
         bools.add(name);
       } else if (VALUE_FLAGS.has(name)) {
@@ -79,6 +93,21 @@ const num = (p: ParsedArgs, name: string): number | undefined => {
 };
 
 const PRODUCTS = new Set<SearchProduct>(['Top', 'Latest', 'Media', 'People']);
+const SORTS = new Set<CacheSort>(['relevance', 'newest', 'oldest', 'likes', 'views', 'bookmarks']);
+
+function buildCacheOpts(parsed: ParsedArgs): CacheViewOpts {
+  const limit = num(parsed, 'limit');
+  const sort = first(parsed, 'sort');
+  return {
+    ...(first(parsed, 'query') ? { query: first(parsed, 'query') } : {}),
+    ...(limit !== undefined ? { limit } : {}),
+    ...(sort && SORTS.has(sort as CacheSort) ? { sort: sort as CacheSort } : {}),
+    ...(parsed.bools.has('live') ? { live: true } : {}),
+    ...(parsed.bools.has('sync') ? { sync: true } : {}),
+    ...(parsed.bools.has('repair') ? { repair: true } : {}),
+    ...(num(parsed, 'max') !== undefined ? { max: num(parsed, 'max') } : {}),
+  };
+}
 
 function helpText(): string {
   const lines = ['xrelay — deep-research over X/Twitter', '', 'Commands:'];
@@ -130,9 +159,21 @@ export async function dispatch(parsed: ParsedArgs, engine: Engine): Promise<Enve
     case 'thread':
       return runThread(engine, extractTweetId(target) ?? target);
     case 'bookmarks':
-      return runBookmarks(engine, {
-        ...(num(parsed, 'limit') !== undefined ? { limit: num(parsed, 'limit') } : {}),
+      return runBookmarks(engine, buildCacheOpts(parsed));
+    case 'my-posts':
+      return runMyPosts(engine, {
+        ...buildCacheOpts(parsed),
+        ...(first(parsed, 'handle') ? { handle: first(parsed, 'handle') } : {}),
       });
+    case 'sync': {
+      const source = target === 'posts' || target === 'all' ? target : 'bookmarks';
+      return runSync(engine, {
+        source,
+        ...(first(parsed, 'handle') ? { handle: first(parsed, 'handle') } : {}),
+        repair: parsed.bools.has('repair'),
+        ...(num(parsed, 'max') !== undefined ? { max: num(parsed, 'max') } : {}),
+      });
+    }
     default:
       return err('cli', 'UNKNOWN_COMMAND', `unknown command: ${command ?? '(none)'}`);
   }
