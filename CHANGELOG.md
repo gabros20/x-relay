@@ -1,3 +1,11 @@
+# [1.3.0](https://github.com/gabros20/x-relay/compare/v1.2.0...v1.3.0) (2026-06-05)
+
+
+### Features
+
+* **engine:** account pool + proxy rotation ([12e01c5](https://github.com/gabros20/x-relay/commit/12e01c521b42ce131461dce876be22908ad5ac5d))
+* **engine:** communities — feed + info ([4e0c05f](https://github.com/gabros20/x-relay/commit/4e0c05f148850f0a838638d4d2fe45285708236a))
+
 # [1.2.0](https://github.com/gabros20/x-relay/compare/v1.1.0...v1.2.0) (2026-06-04)
 
 
