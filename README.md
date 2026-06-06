@@ -19,3 +19,23 @@ The MCP shim is provided for parity and non-CLI hosts.
 ## License
 
 MIT © Tamas Gabor
+
+## Optional Hermes Tweet backend
+
+`xrelay` defaults to its local browser-cookie engine. If a deployment cannot
+use local X cookies, route `search` and `user` through Hermes Tweet/Xquik while
+leaving the rest of the command surface on the default engine:
+
+```bash
+export XRELAY_BACKEND=hermes-tweet
+export HERMES_TWEET_API_KEY="xq_..."
+# Optional, defaults to https://xquik.com
+export HERMES_TWEET_BASE_URL="https://xquik.com"
+```
+
+`XQUIK_API_KEY` and `XQUIK_BASE_URL` are also accepted. Xquik keys are sent with
+`x-api-key`; other tokens use bearer auth. `search` forwards `q`, `limit`, and
+`Top`/`Latest` sort preference to `/api/v1/x/tweets/search`, then normalizes the
+response into the existing `xrelay` tweet envelope. `user` calls
+`/api/v1/x/users/{handle}`. Unsupported commands continue through the normal
+local backend.
