@@ -5,6 +5,7 @@
 
 import type {
   Article,
+  ArticleBrief,
   Author,
   Community,
   MediaItem,
@@ -187,9 +188,13 @@ function videoItem(media: Record<string, unknown>): MediaItem | null {
   const variants = info?.variants;
   if (!Array.isArray(variants)) return null;
   const best = bestVideoVariant(variants);
-  if (best === undefined) return null;
-  const item: MediaItem = { type: 'video', url: best.url, bitrate: best.bitrate };
-  const thumbnail = asString(media.media_url_https);
+  const fallbackUrl = asString(media.media_url_https);
+  // When no mp4 variant exists, fall back to media_url_https rather than dropping the item.
+  const url = best !== undefined ? best.url : fallbackUrl;
+  if (url === undefined) return null;
+  const item: MediaItem = { type: 'video', url, ...mediaDimensions(media) };
+  if (best !== undefined) item.bitrate = best.bitrate;
+  const thumbnail = fallbackUrl;
   if (thumbnail !== undefined) item.thumbnail = thumbnail;
   const durationMs = asNumber(info?.duration_millis);
   if (durationMs !== undefined) item.durationMs = durationMs;
@@ -199,11 +204,16 @@ function videoItem(media: Record<string, unknown>): MediaItem | null {
 function gifItem(media: Record<string, unknown>): MediaItem | null {
   const info = child(media, 'video_info');
   const variants = info?.variants;
+  // Parity with twitter-cli: GIFs are served as mp4 — prefer the highest-bitrate
+  // mp4 variant, then the first variant url, then media_url_https (never drop).
+  const best = Array.isArray(variants) ? bestVideoVariant(variants) : undefined;
   const first = Array.isArray(variants) ? variants[0] : undefined;
-  const url = isRecord(first) ? asString(first.url) : undefined;
+  const variantUrl = isRecord(first) ? asString(first.url) : undefined;
+  const fallbackUrl = asString(media.media_url_https);
+  const url = best?.url ?? variantUrl ?? fallbackUrl;
   if (url === undefined) return null;
-  const item: MediaItem = { type: 'gif', url };
-  const thumbnail = asString(media.media_url_https);
+  const item: MediaItem = { type: 'gif', url, ...mediaDimensions(media) };
+  const thumbnail = fallbackUrl;
   if (thumbnail !== undefined) item.thumbnail = thumbnail;
   return item;
 }
@@ -363,15 +373,15 @@ function locateTweetResult(json: unknown): Record<string, unknown> | undefined {
 }
 
 /**
- * Render a long-form X Article from a TweetResultByRestId response to Markdown.
- * Returns null when the response carries no article_results. Renders Draft.js
- * blocks (headers, lists, blockquote, code, atomic) with inline LINK splicing.
+ * Render an ArticleBrief from a single tweet result node (e.g. the node inside
+ * tweetResult.result). Locates article_results within that node, renders
+ * content_state blocks to Markdown, and returns { title, markdown }. Returns
+ * null when no article_results are present on the node.
  */
-export function parseArticle(json: unknown): Article | null {
-  const tweetResult = locateTweetResult(json);
-  if (tweetResult === undefined) return null;
+export function renderArticleFromResult(tweetResultNode: unknown): ArticleBrief | null {
+  if (!isRecord(tweetResultNode)) return null;
 
-  const articleWrapper = findDict(tweetResult, 'article_results', true)[0];
+  const articleWrapper = findDict(tweetResultNode, 'article_results', true)[0];
   const articleResult = isRecord(articleWrapper) ? articleWrapper.result : undefined;
   if (!isRecord(articleResult)) return null;
 
@@ -383,12 +393,27 @@ export function parseArticle(json: unknown): Article | null {
   const entityMap = normalizeEntityMap(contentState?.entityMap);
   const markdown = renderBlocks(blocks, entityMap);
 
+  return { title, markdown };
+}
+
+/**
+ * Render a long-form X Article from a TweetResultByRestId response to Markdown.
+ * Returns null when the response carries no article_results. Renders Draft.js
+ * blocks (headers, lists, blockquote, code, atomic) with inline LINK splicing.
+ */
+export function parseArticle(json: unknown): Article | null {
+  const tweetResult = locateTweetResult(json);
+  if (tweetResult === undefined) return null;
+
+  const brief = renderArticleFromResult(tweetResult);
+  if (brief === null) return null;
+
   const id = asString(tweetResult.rest_id) ?? asString(child(tweetResult, 'legacy')?.id_str) ?? '';
 
   const article: Article = {
     id,
-    title,
-    markdown,
+    title: brief.title,
+    markdown: brief.markdown,
     url: `https://x.com/i/status/${id}`,
   };
   const author = articleAuthor(tweetResult);

@@ -385,3 +385,252 @@ describe('parseThread', () => {
     expect(thread.nextCursor).toBe('MORE_REPLIES');
   });
 });
+
+// ── Rich mode + depth cap + retweet unwrap fixtures ──────────────────────────
+
+/** A tweet result node that carries a photo and a video media item. */
+function tweetResultWithMedia() {
+  return {
+    __typename: 'Tweet',
+    rest_id: '2000000000000000001',
+    core: { user_results: { result: newUserResult() } },
+    views: { count: '999' },
+    full_text: 'A tweet with media',
+    created_at: 'Mon May 04 12:00:00 +0000 2026',
+    lang: 'en',
+    favorite_count: 10,
+    retweet_count: 2,
+    extended_entities: {
+      media: [
+        {
+          type: 'photo',
+          media_url_https: 'https://pbs.twimg.com/media/photo.jpg',
+          original_info: { width: 1200, height: 800 },
+        },
+        {
+          type: 'video',
+          media_url_https: 'https://pbs.twimg.com/media/thumb.jpg',
+          original_info: { width: 1280, height: 720 },
+          video_info: {
+            duration_millis: 30000,
+            variants: [
+              {
+                content_type: 'video/mp4',
+                bitrate: 2176000,
+                url: 'https://video.twimg.com/ext_tw_video/best.mp4',
+              },
+            ],
+          },
+        },
+      ],
+    },
+  };
+}
+
+/** A tweet result node that carries an article. */
+function tweetResultWithArticle() {
+  return {
+    __typename: 'Tweet',
+    rest_id: '2000000000000000002',
+    core: { user_results: { result: newUserResult() } },
+    views: { count: '500' },
+    full_text: 'An article tweet',
+    created_at: 'Mon May 04 12:00:00 +0000 2026',
+    lang: 'en',
+    favorite_count: 5,
+    article: {
+      article_results: {
+        result: {
+          title: 'My Article Title',
+          content_state: {
+            blocks: [{ type: 'unstyled', text: 'Hello world', entityRanges: [] }],
+            entityMap: {},
+          },
+        },
+      },
+    },
+  };
+}
+
+/** An outer retweet result wrapping an inner tweet. */
+function retweetResult() {
+  const inner = {
+    __typename: 'Tweet',
+    rest_id: '3000000000000000001',
+    core: {
+      user_results: {
+        result: {
+          __typename: 'User',
+          rest_id: '12345',
+          core: { screen_name: 'original_author', name: 'Original Author' },
+          legacy: null,
+          followers_count: 1000,
+        },
+      },
+    },
+    full_text: 'This is the original tweet content',
+    created_at: 'Mon May 04 12:00:00 +0000 2026',
+    lang: 'en',
+    favorite_count: 50,
+    retweet_count: 10,
+  };
+  return {
+    __typename: 'Tweet',
+    rest_id: '3000000000000000002',
+    core: {
+      user_results: {
+        result: {
+          __typename: 'User',
+          rest_id: '99999',
+          core: { screen_name: 'retweeter', name: 'The Retweeter' },
+          legacy: null,
+          followers_count: 500,
+        },
+      },
+    },
+    full_text: 'RT @original_author: This is the original tweet content',
+    created_at: 'Tue May 05 10:00:00 +0000 2026',
+    lang: 'en',
+    favorite_count: 0,
+    retweet_count: 0,
+    retweeted_status_result: { result: inner },
+  };
+}
+
+/** Build a deeply-nested quoted tweet chain (3 levels deep). */
+function deeplyQuotedTweetResult() {
+  const level3 = { ...newTweetResult() };
+  level3.rest_id = '1000000000000000003';
+  level3.full_text = 'Level 3 quoted';
+
+  const level2 = { ...newTweetResult() };
+  level2.rest_id = '1000000000000000002';
+  level2.full_text = 'Level 2 quoted';
+  (level2 as Record<string, unknown>).quoted_status_result = { result: level3 };
+
+  const level1 = { ...newTweetResult() };
+  level1.rest_id = '1000000000000000001';
+  level1.full_text = 'Level 1 quoted';
+  (level1 as Record<string, unknown>).quoted_status_result = { result: level2 };
+
+  const outer = { ...newTweetResult() };
+  outer.rest_id = '1000000000000000000';
+  outer.full_text = 'Outer tweet quoting level 1';
+  (outer as Record<string, unknown>).quoted_status_result = { result: level1 };
+
+  return outer;
+}
+
+describe('parseTweetResult — rich mode', () => {
+  test('rich mode attaches mediaItems when present', () => {
+    const tweet = parseTweetResult(tweetResultWithMedia(), { rich: true });
+    expect(tweet).not.toBeNull();
+    expect(tweet?.mediaItems).toBeDefined();
+    expect(tweet?.mediaItems?.length).toBe(2);
+    expect(tweet?.mediaItems?.[0]).toMatchObject({
+      type: 'photo',
+      url: 'https://pbs.twimg.com/media/photo.jpg',
+    });
+    expect(tweet?.mediaItems?.[1]).toMatchObject({
+      type: 'video',
+      url: 'https://video.twimg.com/ext_tw_video/best.mp4',
+    });
+  });
+
+  test('rich mode attaches article when present', () => {
+    const tweet = parseTweetResult(tweetResultWithArticle(), { rich: true });
+    expect(tweet).not.toBeNull();
+    expect(tweet?.article).toBeDefined();
+    expect(tweet?.article?.title).toBe('My Article Title');
+    expect(tweet?.article?.markdown).toBe('Hello world');
+  });
+
+  test('slim mode (default) does NOT attach mediaItems (regression guard)', () => {
+    const tweet = parseTweetResult(tweetResultWithMedia());
+    expect(tweet).not.toBeNull();
+    expect(tweet?.mediaItems).toBeUndefined();
+  });
+
+  test('slim mode (default) does NOT attach article (regression guard)', () => {
+    const tweet = parseTweetResult(tweetResultWithArticle());
+    expect(tweet).not.toBeNull();
+    expect(tweet?.article).toBeUndefined();
+  });
+
+  test('rich mode with no media/article attaches nothing extra', () => {
+    const tweet = parseTweetResult(newTweetResult(), { rich: true });
+    expect(tweet).not.toBeNull();
+    // newTweetResult has extended_entities with photo/video/gif media kinds only
+    // in the slim media array; but no full media objects with urls → mediaItems absent
+    // (the slim fixture does NOT have media_url_https, so extractTweetMedia returns [])
+    expect(tweet?.article).toBeUndefined();
+  });
+});
+
+describe('parseTweetResult — retweet unwrap', () => {
+  test('content/author come from the inner tweet, isRetweet true, retweetedBy = outer handle', () => {
+    const tweet = parseTweetResult(retweetResult());
+    expect(tweet).not.toBeNull();
+    expect(tweet?.isRetweet).toBe(true);
+    expect(tweet?.retweetedBy).toBe('retweeter');
+    // Content comes from inner tweet
+    expect(tweet?.text).toBe('This is the original tweet content');
+    expect(tweet?.author.handle).toBe('original_author');
+    expect(tweet?.id).toBe('3000000000000000002');
+  });
+
+  test('retweet unwrap works in rich mode too', () => {
+    const tweet = parseTweetResult(retweetResult(), { rich: true });
+    expect(tweet?.isRetweet).toBe(true);
+    expect(tweet?.retweetedBy).toBe('retweeter');
+    expect(tweet?.author.handle).toBe('original_author');
+  });
+});
+
+describe('parseTweetResult — depth cap on quoted recursion', () => {
+  test('quoted nested beyond depth 2 stops recursing (no over-deep quoted)', () => {
+    const tweet = parseTweetResult(deeplyQuotedTweetResult());
+    expect(tweet).not.toBeNull();
+    // outer → level1 quoted (depth 1) → level2 quoted (depth 2) → level3 (depth 3, should be capped)
+    expect(tweet?.quoted).toBeDefined(); // level1
+    expect(tweet?.quoted?.quoted).toBeDefined(); // level2
+    expect(tweet?.quoted?.quoted?.quoted).toBeUndefined(); // level3 — CAPPED
+  });
+
+  test('depth cap does not affect the first 2 levels of quoting', () => {
+    const tweet = parseTweetResult(deeplyQuotedTweetResult());
+    expect(tweet?.quoted?.id).toBe('1000000000000000001');
+    expect(tweet?.quoted?.quoted?.id).toBe('1000000000000000002');
+  });
+});
+
+describe('parseTimeline — rich mode threading', () => {
+  test('rich option is threaded down to parseTweetResult (mediaItems populated)', () => {
+    const json = searchTimeline([
+      {
+        entryId: 'tweet-media',
+        content: {
+          entryType: 'TimelineTimelineItem',
+          itemContent: { tweet_results: { result: tweetResultWithMedia() } },
+        },
+      },
+    ]);
+    const page = parseTimeline(json, { rich: true });
+    expect(page.tweets[0]?.mediaItems).toBeDefined();
+    expect(page.tweets[0]?.mediaItems?.length).toBe(2);
+  });
+
+  test('slim mode (default) does not pass rich to parseTweetResult', () => {
+    const json = searchTimeline([
+      {
+        entryId: 'tweet-media',
+        content: {
+          entryType: 'TimelineTimelineItem',
+          itemContent: { tweet_results: { result: tweetResultWithMedia() } },
+        },
+      },
+    ]);
+    const page = parseTimeline(json);
+    expect(page.tweets[0]?.mediaItems).toBeUndefined();
+  });
+});

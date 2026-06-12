@@ -108,6 +108,30 @@ describe('bookmarksRequest', () => {
     expect(v.count).toBe(100);
     expect(v.cursor).toBe('C');
   });
+
+  // archive page-size parity (§9.5#7): twitter-cli pages at min(count-have+5, 40)
+  test('archive page size: count:40 sets variables.count to 40', () => {
+    const { variables } = bookmarksRequest({ count: 40 });
+    expect((variables as Record<string, unknown>).count).toBe(40);
+  });
+
+  test('includes graphql_timeline_v2_bookmark_timeline:true at count:40', () => {
+    const { features } = bookmarksRequest({ count: 40 });
+    expect((features as Record<string, unknown>).graphql_timeline_v2_bookmark_timeline).toBe(true);
+  });
+
+  // §9.5#6: twitter-cli sends zero fieldToggles for Bookmarks — article content rides on
+  // responsive_web_twitter_article_tweet_consumption_enabled (already in FEATURES).
+  // Do NOT add withArticleRichContentState speculatively; verify with a real response first.
+  test('has no fieldToggles by default (parity with twitter-cli §9.5#6)', () => {
+    const req = bookmarksRequest({});
+    expect(req.fieldToggles).toBeUndefined();
+  });
+
+  test('has no article fieldToggle at archive page size count:40', () => {
+    const req = bookmarksRequest({ count: 40 });
+    expect(req.fieldToggles).toBeUndefined();
+  });
 });
 
 describe('userTweetsRequest', () => {

@@ -1,8 +1,10 @@
+import { toArchiveTweet } from '../archive.ts';
 // The Engine — the only network-facing surface. Wires the transaction-id
 // generator + auth headers + op config + request driver + parser into the
 // high-level research operations the commands consume. Network lives here so
 // command logic stays pure and testable. See docs/ENGINE-RESEARCH.md.
 import type {
+  ArchiveTweet,
   Article,
   Community,
   MediaItem,
@@ -50,6 +52,10 @@ import {
 import { ClientTransaction, handleXMigration } from './xctid/index.ts';
 
 const DEFAULT_LIMIT = 40;
+/** `archive --full` pacing: base + jitter (ms) between pages — a single-account
+ * rate-limit guard for long (~125-page) sweeps (ARCHIVE-PLAN §9.5#7). */
+const ARCHIVE_PAGE_DELAY_MIN_MS = 400;
+const ARCHIVE_PAGE_DELAY_JITTER_MS = 400;
 /** Stop paginating after this many consecutive pages with no fresh tweets. */
 const EMPTY_PAGE_TOLERANCE = 3;
 
@@ -88,6 +94,21 @@ export interface PageOpts {
   stopAtId?: string;
 }
 
+export interface ArchiveBookmarksOpts {
+  /** Maximum number of tweets to collect (default: DEFAULT_LIMIT). */
+  limit?: number;
+  /**
+   * Set of already-archived tweet ids. When provided and `full` is not set,
+   * pagination stops after `tolerance` consecutive known ids (membership stop).
+   */
+  knownIds?: Set<string>;
+  /**
+   * When true, ignore `knownIds` and page through up to `limit` tweets
+   * (full rebuild / repair run).
+   */
+  full?: boolean;
+}
+
 /** Snowflake ids are time-ordered; compare as BigInt, falling back to string length/compare. */
 function idLte(a: string, b: string): boolean {
   try {
@@ -115,6 +136,12 @@ export interface Engine {
   media(tweetId: string): Promise<MediaItem[]>;
   community(communityId: string, opts?: PageOpts): Promise<TweetPage>;
   communityInfo(communityId: string): Promise<Community | null>;
+  /**
+   * Fetch bookmarks at full fidelity and return them as ArchiveTweet[].
+   * Default (incremental): stops after `tolerance` consecutive known ids when `knownIds` is provided.
+   * With `full: true`: ignores `knownIds` and pages up to `limit`.
+   */
+  archiveBookmarks(opts?: ArchiveBookmarksOpts): Promise<ArchiveTweet[]>;
   /** The authenticated user's own @handle (from the session), or null. Memoized. */
   me(): Promise<string | null>;
 }
@@ -168,19 +195,34 @@ function createTransactionProvider(fetchImpl?: typeof fetch): {
   };
 }
 
-/** Follows bottom cursors, de-duping by id, until `limit`, `stopAtId`, or exhaustion. */
+/**
+ * Optional membership-stop configuration for `paginate`.
+ * When provided, paginate counts CONSECUTIVE already-known ids; once the count
+ * reaches `tolerance` (default 3) it stops. Only tweets whose id is NOT known
+ * are collected.
+ */
+export interface MembershipStop {
+  isKnown: (id: string) => boolean;
+  tolerance?: number;
+}
+
+/** Follows bottom cursors, de-duping by id, until `limit`, `stopAtId`, `stop`, or exhaustion. */
 async function paginate(
   fetchPage: (cursor?: string) => Promise<TweetPage>,
   limit: number,
   stopAtId?: string,
+  stop?: MembershipStop,
 ): Promise<TweetPage> {
   const tweets: Tweet[] = [];
   const seen = new Set<string>();
   let cursor: string | undefined;
   let emptyStreak = 0;
   let reachedWatermark = false;
+  const membershipTolerance = stop?.tolerance ?? 3;
+  let consecutiveKnown = 0;
+  let reachedMembershipStop = false;
 
-  while (tweets.length < limit && !reachedWatermark) {
+  while (tweets.length < limit && !reachedWatermark && !reachedMembershipStop) {
     const page = await fetchPage(cursor);
     let fresh = 0;
     for (const t of page.tweets) {
@@ -190,15 +232,27 @@ async function paginate(
       }
       if (seen.has(t.id)) continue;
       seen.add(t.id);
-      tweets.push(t);
-      fresh += 1;
+
+      if (stop?.isKnown(t.id)) {
+        // Known tweet — count toward consecutive streak but don't collect.
+        consecutiveKnown += 1;
+        if (consecutiveKnown >= membershipTolerance) {
+          reachedMembershipStop = true;
+          break;
+        }
+      } else {
+        // Fresh (unknown) tweet — reset streak and collect.
+        consecutiveKnown = 0;
+        tweets.push(t);
+        fresh += 1;
+      }
     }
 
-    if (reachedWatermark) break;
-    if (fresh === 0) {
+    if (reachedWatermark || reachedMembershipStop) break;
+    if (fresh === 0 && stop === undefined) {
       emptyStreak += 1;
       if (emptyStreak >= EMPTY_PAGE_TOLERANCE) break;
-    } else {
+    } else if (stop === undefined) {
       emptyStreak = 0;
     }
 
@@ -207,9 +261,9 @@ async function paginate(
   }
 
   const out: TweetPage = { tweets: tweets.slice(0, limit) };
-  // When we stopped at the watermark the timeline isn't exhausted, but there's
-  // nothing newer to fetch, so we intentionally omit nextCursor.
-  if (cursor !== undefined && !reachedWatermark) out.nextCursor = cursor;
+  // When we stopped at the watermark or membership stop the timeline isn't exhausted,
+  // but there's nothing newer to fetch, so we intentionally omit nextCursor.
+  if (cursor !== undefined && !reachedWatermark && !reachedMembershipStop) out.nextCursor = cursor;
   return out;
 }
 
@@ -527,6 +581,39 @@ export function createEngine(deps: EngineDeps): Engine {
     async communityInfo(communityId) {
       const value = await call('CommunityByRestId', communityRequest({ communityId }));
       return parseCommunity(value);
+    },
+
+    async archiveBookmarks(opts) {
+      const limit = opts?.limit ?? DEFAULT_LIMIT;
+      const full = opts?.full === true;
+      const knownIds = opts?.knownIds;
+
+      // Build membership stop only for incremental (non-full) runs when knownIds is given.
+      const membershipStop: MembershipStop | undefined =
+        !full && knownIds !== undefined && knownIds.size > 0
+          ? { isKnown: (id) => knownIds.has(id) }
+          : undefined;
+
+      let pageCount = 0;
+      const page = await paginate(
+        async (cursor) => {
+          // Polite pacing for full runs: a jittered delay between pages keeps a
+          // single-account, ~125-page sweep under X's rate limits (skip first page).
+          if (full && pageCount > 0) {
+            await sleep(
+              ARCHIVE_PAGE_DELAY_MIN_MS + Math.floor(Math.random() * ARCHIVE_PAGE_DELAY_JITTER_MS),
+            );
+          }
+          pageCount += 1;
+          const value = await call('Bookmarks', bookmarksRequest({ cursor, count: 40 }));
+          return parseTimeline(value, { rich: true });
+        },
+        limit,
+        undefined,
+        membershipStop,
+      );
+
+      return page.tweets.map(toArchiveTweet);
     },
   };
 

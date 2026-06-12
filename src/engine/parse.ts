@@ -13,6 +13,7 @@ import type {
   TweetPage,
   UserProfile,
 } from '../types.ts';
+import { extractTweetMedia, renderArticleFromResult } from './parse-extra.ts';
 
 // ── Narrowing helpers ───────────────────────────────────────────────────────
 
@@ -285,26 +286,23 @@ function applyTweetDetails(
   if (media !== undefined) tweet.media = media;
 }
 
-/** Populate isReply/isRetweet/isQuote + the quoted-tweet recursion in place. */
+/** Populate isReply/isQuote + the quoted-tweet recursion in place. Does NOT handle retweet — that is done in parseTweetResult via unwrap-first. */
 function applyTweetRelations(
   tweet: Tweet,
   result: Record<string, unknown>,
   legacy: Record<string, unknown> | undefined,
+  opts: { rich?: boolean; depth: number },
 ): void {
   if (dualString(result, legacy, 'in_reply_to_status_id_str') !== undefined) tweet.isReply = true;
-
-  const isRetweet =
-    child(result, 'retweeted_status_result') !== undefined ||
-    (legacy ? child(legacy, 'retweeted_status_result') !== undefined : false);
-  if (isRetweet) tweet.isRetweet = true;
 
   const quoteId = dualString(result, legacy, 'quoted_status_id_str');
   const quotedNode =
     child(result, 'quoted_status_result') ??
     (legacy ? child(legacy, 'quoted_status_result') : undefined);
   if (quoteId !== undefined || quotedNode !== undefined) tweet.isQuote = true;
-  if (quotedNode !== undefined) {
-    const quoted = parseTweetResult(quotedNode.result);
+  // Depth cap: mirror twitter-cli's `depth > 2` guard — do not recurse at depth >= 2.
+  if (quotedNode !== undefined && opts.depth < 2) {
+    const quoted = parseTweetResult(quotedNode.result, { rich: opts.rich, depth: opts.depth + 1 });
     if (quoted !== null) tweet.quoted = quoted;
   }
 }
@@ -314,32 +312,80 @@ function applyTweetRelations(
  * `TweetWithVisibilityResults` (→ `.tweet`), returns null for a `TweetTombstone`
  * (or any non-tweet). Reads every legacy field as `node.legacy?.X ?? node.X` so
  * it works whether legacy is populated or hoisted (docs/ENGINE-RESEARCH.md §5).
+ *
+ * @param opts.rich  When true, attaches `mediaItems` and `article` to the tweet.
+ * @param opts.depth Internal depth counter for quoted recursion (default 0). Do not pass externally.
  */
-export function parseTweetResult(result: unknown): Tweet | null {
+export function parseTweetResult(
+  result: unknown,
+  opts?: { rich?: boolean; depth?: number },
+): Tweet | null {
   if (!isRecord(result)) return null;
 
   if (result.__typename === 'TweetWithVisibilityResults') {
-    return parseTweetResult(result.tweet);
+    return parseTweetResult(result.tweet, opts);
   }
   if (result.__typename === 'TweetTombstone') return null;
 
-  const legacy = child(result, 'legacy');
-  const id = asString(result.rest_id) ?? asString(legacy?.id_str);
+  // ── Retweet unwrap-first (§9.5#4) ─────────────────────────────────────────
+  // When retweeted_status_result is present, capture the outer author's handle
+  // (the retweeter), then swap `result` to the inner tweet node so all content
+  // fields (text, media, urls, metrics, quoted, article, lang) come from the
+  // original tweet. We keep the OUTER tweet's `rest_id` as the tweet id.
+  const outerLegacy = child(result, 'legacy');
+  const retweetedNode =
+    child(result, 'retweeted_status_result') ??
+    (outerLegacy ? child(outerLegacy, 'retweeted_status_result') : undefined);
+  let retweetedBy: string | undefined;
+  let contentResult: Record<string, unknown> = result;
+
+  if (retweetedNode !== undefined) {
+    const outerAuthor = parseAuthor(result);
+    if (outerAuthor !== null) retweetedBy = outerAuthor.handle;
+    // Unwrap TweetWithVisibilityResults on the inner node too.
+    const inner = retweetedNode.result;
+    let innerNode = isRecord(inner) ? inner : undefined;
+    if (innerNode?.__typename === 'TweetWithVisibilityResults' && isRecord(innerNode.tweet)) {
+      innerNode = innerNode.tweet as Record<string, unknown>;
+    }
+    if (innerNode !== undefined) contentResult = innerNode;
+  }
+
+  const legacy = child(contentResult, 'legacy');
+  // Use OUTER rest_id as the tweet id (the retweeted entry id in the timeline).
+  const id = asString(result.rest_id) ?? asString(outerLegacy?.id_str);
   if (id === undefined) return null;
 
-  const author = parseAuthor(result);
+  const author = parseAuthor(contentResult);
   if (author === null) return null;
+
+  const depth = opts?.depth ?? 0;
+  const rich = opts?.rich === true;
 
   const tweet: Tweet = {
     id,
     url: `https://x.com/${author.handle}/status/${id}`,
-    text: tweetText(result, legacy),
+    text: tweetText(contentResult, legacy),
     author,
-    metrics: tweetMetrics(result, legacy),
+    metrics: tweetMetrics(contentResult, legacy),
   };
 
-  applyTweetDetails(tweet, result, legacy);
-  applyTweetRelations(tweet, result, legacy);
+  if (retweetedBy !== undefined) {
+    tweet.isRetweet = true;
+    tweet.retweetedBy = retweetedBy;
+  }
+
+  applyTweetDetails(tweet, contentResult, legacy);
+  applyTweetRelations(tweet, contentResult, legacy, { rich, depth });
+
+  // ── Rich mode extras (slim path stays byte-identical) ─────────────────────
+  if (rich) {
+    const mediaItems = extractTweetMedia(contentResult);
+    if (mediaItems.length > 0) tweet.mediaItems = mediaItems;
+    const article = renderArticleFromResult(contentResult);
+    if (article !== null) tweet.article = article;
+  }
+
   return tweet;
 }
 
@@ -403,8 +449,10 @@ function entryTweetNodes(entry: Record<string, unknown>): unknown[] {
  * nextCursor from the Bottom cursor entry, drops cursor/promoted/who-to-follow/
  * module entries, de-dupes by id, and skips any tweet that fails to parse so one
  * bad node never kills the page (docs/ENGINE-RESEARCH.md §5).
+ *
+ * @param opts.rich  When true, passes rich mode down to each parseTweetResult call.
  */
-export function parseTimeline(json: unknown, _opts?: { instructionsPath?: string }): TweetPage {
+export function parseTimeline(json: unknown, opts?: { rich?: boolean }): TweetPage {
   const entries = collectEntries(locateInstructions(json));
   const tweets: Tweet[] = [];
   const seen = new Set<string>();
@@ -421,7 +469,7 @@ export function parseTimeline(json: unknown, _opts?: { instructionsPath?: string
 
     for (const node of entryTweetNodes(entry)) {
       try {
-        const tweet = parseTweetResult(node);
+        const tweet = parseTweetResult(node, opts?.rich === true ? { rich: true } : undefined);
         if (tweet !== null && !seen.has(tweet.id)) {
           seen.add(tweet.id);
           tweets.push(tweet);

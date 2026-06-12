@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { Cookies } from '../src/engine/auth.ts';
 import { type EngineClient, EngineError, createEngine } from '../src/engine/index.ts';
+import type { ArchiveTweet } from '../src/types.ts';
 
 const cookies: Cookies = { authToken: 'a', ct0: 'b' };
 
@@ -307,5 +308,120 @@ describe('account pool rotation', () => {
     const engine = createEngine({ cookies, clients, sleep: async () => {} });
     await expect(engine.search('x', { limit: 1 })).rejects.toThrow(EngineError);
     expect(log).toEqual(['a']);
+  });
+});
+
+// ── archiveBookmarks fixtures ────────────────────────────────────────────────
+
+/**
+ * A rich bookmark timeline page with photo media and createdAt set.
+ * Entry ids use the 'tweet-' prefix so parseTimeline picks them up.
+ */
+function richBookmarkPage(ids: string[], cursor?: string): unknown {
+  const entries: unknown[] = ids.map((id) => ({
+    entryId: `tweet-${id}`,
+    content: {
+      itemContent: {
+        tweet_results: {
+          result: {
+            __typename: 'Tweet',
+            rest_id: id,
+            core: {
+              user_results: {
+                result: {
+                  __typename: 'User',
+                  rest_id: `u${id}`,
+                  core: { screen_name: 'bob', name: 'Bob' },
+                  legacy: {
+                    profile_image_url_https: `https://pbs.twimg.com/profile_images/${id}/photo.jpg`,
+                  },
+                },
+              },
+            },
+            legacy: {
+              full_text: `bookmark tweet ${id}`,
+              favorite_count: 5,
+              created_at: 'Wed Jun 10 16:06:30 +0000 2026',
+              extended_entities: {
+                media: [
+                  {
+                    type: 'photo',
+                    media_url_https: `https://pbs.twimg.com/media/${id}.jpg`,
+                    original_info: { width: 1200, height: 675 },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      },
+    },
+  }));
+  if (cursor !== undefined) {
+    entries.push({
+      entryId: `cursor-bottom-${cursor}`,
+      content: { cursorType: 'Bottom', value: cursor },
+    });
+  }
+  return {
+    data: {
+      bookmark_timeline_v2: {
+        timeline: { instructions: [{ type: 'TimelineAddEntries', entries }] },
+      },
+    },
+  };
+}
+
+describe('archiveBookmarks', () => {
+  test('returns rich ArchiveTweet[] with media url and createdAtISO set', async () => {
+    const client = fakeClient({ _start: richBookmarkPage(['100', '200']) });
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    const results: ArchiveTweet[] = await engine.archiveBookmarks();
+    expect(results).toHaveLength(2);
+    expect(results[0]?.id).toBe('100');
+    // media url populated from rich parse
+    expect(results[0]?.media).toBeDefined();
+    expect(results[0]?.media?.[0]?.url).toMatch(/100\.jpg/);
+    // createdAtISO derived from createdAt
+    expect(results[0]?.createdAtISO).toBe('2026-06-10T16:06:30+00:00');
+  });
+
+  test('membership stop halts after tolerance consecutive known ids', async () => {
+    // page 1: ids 10,9,8 — page 2: ids 7,6,5 — all of page 2 are known
+    const client = fakeClient({
+      _start: richBookmarkPage(['10', '9', '8'], 'c1'),
+      c1: richBookmarkPage(['7', '6', '5'], 'c2'),
+      c2: richBookmarkPage(['4', '3', '2'], 'c3'),
+    });
+    // knownIds covers 7,6,5 so after 3 consecutive known ids on page 2 we stop
+    const knownIds = new Set(['7', '6', '5', '4', '3', '2', '1']);
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    const results = await engine.archiveBookmarks({ knownIds });
+    // Only page 1 tweets (10, 9, 8) should be returned — none of them are known
+    // tolerance=3 triggers at the end of page 2 (all 3 known)
+    expect(results.map((t) => t.id)).toEqual(['10', '9', '8']);
+  });
+
+  test('full mode pages through ignoring knownIds', async () => {
+    const client = fakeClient({
+      _start: richBookmarkPage(['10', '9', '8'], 'c1'),
+      c1: richBookmarkPage(['7', '6', '5']),
+    });
+    // Even though all ids are "known", full mode ignores knownIds
+    const knownIds = new Set(['10', '9', '8', '7', '6', '5']);
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    const results = await engine.archiveBookmarks({ knownIds, full: true });
+    expect(results.map((t) => t.id)).toEqual(['10', '9', '8', '7', '6', '5']);
+  });
+
+  test('respects limit option', async () => {
+    const client = fakeClient({
+      _start: richBookmarkPage(['10', '9', '8', '7', '6'], 'c1'),
+      c1: richBookmarkPage(['5', '4', '3']),
+    });
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    const results = await engine.archiveBookmarks({ limit: 3 });
+    expect(results).toHaveLength(3);
+    expect(results.map((t) => t.id)).toEqual(['10', '9', '8']);
   });
 });

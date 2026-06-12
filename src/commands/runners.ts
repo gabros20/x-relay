@@ -3,6 +3,7 @@
 // clean error envelopes; the runners hold no business logic of their own.
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { loadArchive, mergeArchive, saveArchive } from '../archive.ts';
 import {
   type CacheSort,
   type CacheSource,
@@ -292,6 +293,84 @@ function viewCache(source: CacheSource, opts: CacheViewOpts, added?: number): Ca
     view.hint = `cache is empty — run \`xrelay sync ${source}\` first (or pass --live).`;
   }
   return view;
+}
+
+// ── archive ──────────────────────────────────────────────────────────────────
+
+export interface ArchiveCommandOpts {
+  /** The archive sub-target, currently only 'bookmarks'. */
+  target: string;
+  /** Output file path. Required unless --stdout. */
+  out?: string;
+  /** Maximum number of tweets to fetch this run. */
+  limit?: number;
+  /** When true, ignore knownIds and page up to limit (full rebuild). */
+  full?: boolean;
+  /** When true with full, replace the file with exactly the current bookmark set. */
+  prune?: boolean;
+  /** When true, print the archive JSON to stdout instead of saving to disk. */
+  stdout?: boolean;
+}
+
+export interface ArchiveResult {
+  source: 'bookmarks';
+  /** Path the file was written to (undefined when --stdout). */
+  out?: string;
+  /** Number of newly added tweets (not in the prior archive). */
+  added: number;
+  /** Total tweets in the resulting archive. */
+  total: number;
+  /** Max tweet id in the resulting archive. */
+  newestId?: string;
+}
+
+export function runArchive(
+  engine: Engine,
+  opts: ArchiveCommandOpts,
+): Promise<Envelope<ArchiveResult>> {
+  if (opts.target !== 'bookmarks') {
+    return Promise.resolve(
+      err('archive', 'INVALID_INPUT', `unknown archive target: ${opts.target}`),
+    );
+  }
+  if (!opts.stdout && !opts.out) {
+    return Promise.resolve(
+      err('archive', 'INVALID_INPUT', 'provide --out <file.json> or --stdout'),
+    );
+  }
+  return guard('archive', async () => {
+    const outPath = opts.out;
+
+    // Load existing archive to derive knownIds for incremental stop
+    const existing = outPath ? loadArchive(outPath) : null;
+    const knownIds = !opts.full && existing ? new Set(existing.tweets.map((t) => t.id)) : undefined;
+
+    const fresh = await engine.archiveBookmarks({
+      ...(knownIds !== undefined ? { knownIds } : {}),
+      ...(opts.full ? { full: true } : {}),
+      ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
+    });
+
+    const generatedAt = new Date().toISOString();
+    const { file, added } = mergeArchive(existing, fresh, {
+      generatedAt,
+      ...(opts.prune ? { prune: true } : {}),
+    });
+
+    if (opts.stdout) {
+      process.stdout.write(JSON.stringify(file, null, 2));
+    } else if (outPath) {
+      saveArchive(outPath, file);
+    }
+
+    return {
+      source: 'bookmarks' as const,
+      ...(outPath ? { out: outPath } : {}),
+      added,
+      total: file.count,
+      ...(file.newestId !== undefined ? { newestId: file.newestId } : {}),
+    };
+  });
 }
 
 // ── sync ────────────────────────────────────────────────────────────────────

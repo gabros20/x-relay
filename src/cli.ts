@@ -7,6 +7,7 @@ import type { CacheSort } from './cache/index.ts';
 import {
   type CacheViewOpts,
   type SearchCommandOpts,
+  runArchive,
   runArticle,
   runBookmarks,
   runCommunity,
@@ -52,7 +53,7 @@ const VALUE_FLAGS = new Set([
   'woeid',
   'out',
 ]);
-const BOOL_FLAGS = new Set(['replies', 'sync', 'live', 'repair']);
+const BOOL_FLAGS = new Set(['replies', 'sync', 'live', 'repair', 'full', 'prune', 'stdout']);
 /** Single-dash aliases. */
 const SHORT_FLAGS: Record<string, string> = { q: 'query' };
 
@@ -233,6 +234,15 @@ export async function dispatch(parsed: ParsedArgs, engine: Engine): Promise<Enve
         ...(num(parsed, 'max') !== undefined ? { max: num(parsed, 'max') } : {}),
       });
     }
+    case 'archive':
+      return runArchive(engine, {
+        target,
+        ...(first(parsed, 'out') ? { out: first(parsed, 'out') } : {}),
+        ...(num(parsed, 'limit') !== undefined ? { limit: num(parsed, 'limit') } : {}),
+        ...(parsed.bools.has('full') ? { full: true } : {}),
+        ...(parsed.bools.has('prune') ? { prune: true } : {}),
+        ...(parsed.bools.has('stdout') ? { stdout: true } : {}),
+      });
     default:
       return (
         dispatchReadOps(parsed, engine, command, target) ??

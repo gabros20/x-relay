@@ -5,6 +5,7 @@ import {
   parseCommunity,
   parseTrends,
   parseUserTimeline,
+  renderArticleFromResult,
 } from '../src/engine/parse-extra.ts';
 
 // ── parseUserTimeline ────────────────────────────────────────────────────────
@@ -169,6 +170,7 @@ function videoResult() {
           {
             type: 'video',
             media_url_https: 'https://pbs.twimg.com/thumb.jpg',
+            original_info: { width: 1280, height: 720 },
             video_info: {
               duration_millis: 30000,
               variants: [
@@ -192,6 +194,29 @@ function videoResult() {
   };
 }
 
+/** Video with no mp4 variants — should fall back to media_url_https. */
+function videoNoMp4Result() {
+  return {
+    legacy: {
+      extended_entities: {
+        media: [
+          {
+            type: 'video',
+            media_url_https: 'https://pbs.twimg.com/fallback_thumb.jpg',
+            original_info: { width: 640, height: 360 },
+            video_info: {
+              duration_millis: 15000,
+              variants: [
+                { content_type: 'application/x-mpegURL', url: 'https://video.twimg.com/hls.m3u8' },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  };
+}
+
 function gifResult() {
   return {
     legacy: {
@@ -200,8 +225,29 @@ function gifResult() {
           {
             type: 'animated_gif',
             media_url_https: 'https://pbs.twimg.com/gifthumb.jpg',
+            original_info: { width: 480, height: 270 },
             video_info: {
               variants: [{ content_type: 'video/mp4', url: 'https://video.twimg.com/gif.mp4' }],
+            },
+          },
+        ],
+      },
+    },
+  };
+}
+
+/** GIF with no variant url — should fall back to media_url_https. */
+function gifNoVariantResult() {
+  return {
+    legacy: {
+      extended_entities: {
+        media: [
+          {
+            type: 'animated_gif',
+            media_url_https: 'https://pbs.twimg.com/gifonly.jpg',
+            original_info: { width: 320, height: 180 },
+            video_info: {
+              variants: [],
             },
           },
         ],
@@ -232,7 +278,7 @@ describe('extractTweetMedia', () => {
     ]);
   });
 
-  test('video → highest-bitrate mp4 variant, HLS skipped', () => {
+  test('video → highest-bitrate mp4 variant, HLS skipped, includes dimensions', () => {
     expect(extractTweetMedia(videoResult())).toEqual([
       {
         type: 'video',
@@ -240,18 +286,73 @@ describe('extractTweetMedia', () => {
         bitrate: 2176000,
         thumbnail: 'https://pbs.twimg.com/thumb.jpg',
         durationMs: 30000,
+        width: 1280,
+        height: 720,
       },
     ]);
   });
 
-  test('gif → first variant url', () => {
+  test('video → falls back to media_url_https when no mp4 variant, item NOT dropped', () => {
+    const items = extractTweetMedia(videoNoMp4Result());
+    expect(items).toHaveLength(1);
+    expect(items[0].type).toBe('video');
+    expect(items[0].url).toBe('https://pbs.twimg.com/fallback_thumb.jpg');
+    expect(items[0].width).toBe(640);
+    expect(items[0].height).toBe(360);
+  });
+
+  test('gif → first variant url + dimensions', () => {
     expect(extractTweetMedia(gifResult())).toEqual([
       {
         type: 'gif',
         url: 'https://video.twimg.com/gif.mp4',
         thumbnail: 'https://pbs.twimg.com/gifthumb.jpg',
+        width: 480,
+        height: 270,
       },
     ]);
+  });
+
+  test('gif → falls back to media_url_https when variants[0].url missing', () => {
+    const items = extractTweetMedia(gifNoVariantResult());
+    expect(items).toHaveLength(1);
+    expect(items[0].type).toBe('gif');
+    expect(items[0].url).toBe('https://pbs.twimg.com/gifonly.jpg');
+    expect(items[0].width).toBe(320);
+    expect(items[0].height).toBe(180);
+  });
+
+  test('gif → picks highest-bitrate mp4 variant (parity with twitter-cli)', () => {
+    const gifMultiVariant = {
+      legacy: {
+        extended_entities: {
+          media: [
+            {
+              type: 'animated_gif',
+              media_url_https: 'https://pbs.twimg.com/gifmulti.jpg',
+              original_info: { width: 400, height: 300 },
+              video_info: {
+                variants: [
+                  {
+                    content_type: 'video/mp4',
+                    bitrate: 64000,
+                    url: 'https://video.twimg.com/lo.mp4',
+                  },
+                  {
+                    content_type: 'video/mp4',
+                    bitrate: 256000,
+                    url: 'https://video.twimg.com/hi.mp4',
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      },
+    };
+    const items = extractTweetMedia(gifMultiVariant);
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toBe('https://video.twimg.com/hi.mp4');
   });
 
   test('hoisted (legacy null) shape works', () => {
@@ -414,5 +515,50 @@ describe('parseCommunity', () => {
 
   test('returns null when there is no community result', () => {
     expect(parseCommunity({ data: {} })).toBeNull();
+  });
+});
+
+// ── renderArticleFromResult ───────────────────────────────────────────────────
+
+/** A tweet result node (as found inside tweetResult.result) that carries article_results. */
+function tweetResultWithArticle() {
+  return {
+    __typename: 'Tweet',
+    rest_id: '1800000000000000001',
+    legacy: { full_text: 'Read my article' },
+    article: {
+      article_results: {
+        result: {
+          title: 'Deep Dive Into Archives',
+          content_state: {
+            blocks: [
+              { key: 'h', type: 'header-one', text: 'Introduction', entityRanges: [] },
+              { key: 'p', type: 'unstyled', text: 'Archives matter.', entityRanges: [] },
+            ],
+            entityMap: {},
+          },
+        },
+      },
+    },
+  };
+}
+
+describe('renderArticleFromResult', () => {
+  test('returns title + markdown from a tweet-result node with article_results', () => {
+    const brief = renderArticleFromResult(tweetResultWithArticle());
+    expect(brief).not.toBeNull();
+    if (brief === null) return;
+    expect(brief.title).toBe('Deep Dive Into Archives');
+    expect(brief.markdown).toContain('# Introduction');
+    expect(brief.markdown).toContain('Archives matter.');
+  });
+
+  test('returns null when no article_results on the node', () => {
+    expect(renderArticleFromResult({ __typename: 'Tweet', rest_id: '123', legacy: {} })).toBeNull();
+  });
+
+  test('returns null for non-object input', () => {
+    expect(renderArticleFromResult(null)).toBeNull();
+    expect(renderArticleFromResult('nope')).toBeNull();
   });
 });

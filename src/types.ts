@@ -55,9 +55,15 @@ export type Tweet = {
   isReply?: boolean;
   isRetweet?: boolean;
   isQuote?: boolean;
+  /** @handle of the retweeter — set only when isRetweet is true (rich path). */
+  retweetedBy?: string;
   conversationId?: string;
   /** Present when this tweet quotes another. */
   quoted?: Tweet;
+  /** Full media objects — populated only in rich parse mode. Slim `media: MediaKind[]` stays as-is. */
+  mediaItems?: MediaItem[];
+  /** Article title + markdown — populated only in rich parse mode. */
+  article?: ArticleBrief;
 };
 
 /** A full user profile (the `user` command). */
@@ -123,6 +129,12 @@ export type MediaItem = {
   bitrate?: number;
 };
 
+/** A brief representation of an X Article embedded in a tweet (archive use). */
+export interface ArticleBrief {
+  title: string;
+  markdown: string;
+}
+
 /** A long-form X Article rendered to Markdown. */
 export type Article = {
   id: string;
@@ -150,3 +162,49 @@ export type Community = {
   creator?: Author;
   url: string;
 };
+
+// ── Archive ────────────────────────────────────────────────────────────────
+
+/** A single tweet in the full-fidelity archive format. */
+export interface ArchiveTweet {
+  id: string;
+  url: string;
+  text: string;
+  lang?: string;
+  /** Raw timestamp as returned by X, e.g. "Wed Jun 10 16:06:30 +0000 2026". */
+  createdAt?: string;
+  /** ISO 8601, e.g. "2026-06-10T16:06:30+00:00". */
+  createdAtISO?: string;
+  /** Local time string, e.g. "2026-06-10 18:06". */
+  createdAtLocal?: string;
+  author: Author;
+  metrics: Metrics;
+  hashtags?: string[];
+  mentions?: string[];
+  urls?: string[];
+  /** Rich media objects — {type, url, width?, height?, thumbnail?, bitrate?, durationMs?}. */
+  media?: MediaItem[];
+  isReply?: boolean;
+  isRetweet?: boolean;
+  isQuote?: boolean;
+  /** @handle of the retweeter when isRetweet is true. */
+  retweetedBy?: string;
+  conversationId?: string;
+  /** Quoted tweet, recursively archived (depth-limited). */
+  quoted?: ArchiveTweet;
+  /** Article title + markdown when the tweet links an X Article. */
+  article?: ArticleBrief;
+}
+
+/** The top-level JSON envelope for an xrelay archive file. */
+export interface ArchiveFile {
+  schema: 'x-relay/archive@1';
+  source: 'bookmarks';
+  /** ISO timestamp of when the archive was generated. */
+  generatedAt: string;
+  count: number;
+  /** Max tweet id present in the file (reference for display). */
+  newestId?: string;
+  /** Archived tweets, newest-bookmarked first. */
+  tweets: ArchiveTweet[];
+}

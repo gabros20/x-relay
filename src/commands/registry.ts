@@ -130,6 +130,12 @@ export const COMMANDS: CommandDef[] = [
     summary: 'Community metadata: name, description, member/mod counts, rules, topic, creator.',
     usage: 'xrelay community-info <community-id>',
   },
+  {
+    name: 'archive',
+    cost: 'medium — incremental',
+    summary: 'Full-fidelity capture of your bookmarks to a rich JSON archive.',
+    usage: 'xrelay archive bookmarks [--out <file.json>] [--limit N] [--full] [--prune] [--stdout]',
+  },
 ];
 
 export const commandNames: string[] = COMMANDS.map((c) => c.name);

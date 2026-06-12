@@ -19,10 +19,13 @@ export {
   runMedia,
   runCommunity,
   runCommunityInfo,
+  runArchive,
   type SearchCommandOpts,
   type UserPostsCommandOpts,
   type CacheViewOpts,
   type MyPostsOpts,
   type SyncCommandOpts,
+  type ArchiveCommandOpts,
+  type ArchiveResult,
 } from './runners.ts';
 export { buildSearchQuery, type SearchQueryFlags } from './query.ts';

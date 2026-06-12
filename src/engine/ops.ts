@@ -159,6 +159,10 @@ export interface BookmarksParams extends Overrides {
 export function bookmarksRequest(params: BookmarksParams): BuiltRequest {
   const { count = 20, cursor, kv, ft } = params;
   const variables = withCursor({ count, includePromotedContent: true }, cursor);
+  // No fieldToggles set: twitter-cli sends zero fieldToggles for Bookmarks and still receives
+  // article content_state.blocks — article content rides on the already-set feature flag
+  // responsive_web_twitter_article_tweet_consumption_enabled (§9.5#6). Do NOT add
+  // withArticleRichContentState speculatively; verify with a captured bookmark response first.
   return {
     variables: { ...variables, ...kv },
     features: { ...FEATURES, graphql_timeline_v2_bookmark_timeline: true, ...ft },

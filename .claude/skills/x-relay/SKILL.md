@@ -103,6 +103,20 @@ xrelay sync bookmarks|posts|all [--handle <you>] [--repair] [--max N]
   sync). `posts` auto-detects your handle from the session (override/remember with `--handle`). Returns
   `{ source, added, total, watermark }`.
 
+### `archive` — COST: medium — incremental. Full-fidelity capture.
+```
+xrelay archive bookmarks [--out <file.json>] [--limit N] [--full] [--prune] [--stdout]
+```
+- Captures bookmarks at full fidelity (rich media, article markdown, quoted tweets, retweet unwrap,
+  ISO timestamps) into a `{ schema, source, generatedAt, count, newestId, tweets:[ArchiveTweet] }` file.
+- Default (incremental): loads the existing `--out` file, uses its ids to stop early (membership stop —
+  correct for bookmark ordering). Only newly-seen tweets count in `added`.
+- `--full`: ignores knownIds, pages up to `--limit` (full rebuild / repair run).
+- `--prune`: replaces the file with exactly the current bookmark set (drops un-bookmarked tweets).
+  Pair with `--full` for a clean snapshot: `xrelay archive bookmarks --out a.json --full --prune`.
+- `--stdout`: prints the archive JSON to stdout instead of writing to disk.
+- Returns `{ source, out?, added, total, newestId }`.
+
 ### More endpoints
 
 ```
@@ -118,6 +132,8 @@ xrelay article <id|url>                     # a long-form X Article → Markdown
 xrelay media <id|url> [--out <dir>]         # a tweet's image/video URLs; --out downloads the files
 xrelay community <community-id> [--limit N] # a community's tweet feed (topical, moderated sub-network)
 xrelay community-info <community-id>        # community metadata: name, members, rules, topic, creator
+xrelay archive bookmarks [--out <file.json>] [--limit N] [--full] [--prune] [--stdout]
+                                            # full-fidelity capture of your bookmarks to a rich JSON archive
 ```
 
 - **`retweeters`/`followers`/`following`** return `{ users:[<profile>...], nextCursor }` — the
