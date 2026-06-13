@@ -1,15 +1,16 @@
 # x-relay
 
-A **deep-research tool for X/Twitter** for AI agents — a TypeScript **CLI** (`xrelay`), an **MCP server**
+A **read + archive + write tool for X/Twitter** for AI agents — a TypeScript **CLI** (`xrelay`), an **MCP server**
 (`x-relay-mcp`), and a **Claude Code skill**. Cast a wide net with live search, rank candidates cheaply on
 engagement metadata, and read full threads only for the finalists — plus a **local, incrementally-synced cache**
-of your own bookmarks and posts. **No paid X API**: a from-scratch engine on X's private GraphQL surface using
-your login cookies.
+of your own bookmarks and posts, **full-fidelity archiving** (bookmarks / user timelines / lists / likes /
+feed to rich JSON), and **write operations** (post / reply / quote / like / bookmark / retweet / follow /
+delete). **No paid X API**: a from-scratch engine on X's private GraphQL surface using your login cookies.
 
-> **Status:** scaffolding. Design and grounded engine research are in [`PLAN.md`](./PLAN.md) and
-> [`docs/ENGINE-RESEARCH.md`](./docs/ENGINE-RESEARCH.md). Built in the spirit of its sibling
-> [`youtube-relay-mcp`](../youtube-context): atomic capabilities, the agent composes the strategy, a generated
-> `SKILL.md` teaches the funnel.
+> **Status:** complete read + archive + write surface. Design and engine research are in
+> [`PLAN.md`](./PLAN.md) and [`docs/ENGINE-RESEARCH.md`](./docs/ENGINE-RESEARCH.md). Built in the spirit
+> of its sibling [`youtube-relay-mcp`](../youtube-context): atomic capabilities, the agent composes the
+> strategy, a generated `SKILL.md` teaches the funnel.
 
 ## Why a CLI + skill (not just an MCP server)
 

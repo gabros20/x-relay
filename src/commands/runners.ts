@@ -402,8 +402,7 @@ export interface ArchiveCommandOpts extends Partial<SearchQueryFlags> {
   handle?: string;
   /** For user / my-posts targets: include replies in the sweep. */
   replies?: boolean;
-  /** For search target: the raw search query (built by buildSearchQuery from flags). */
-  query?: string;
+  // query?: string is inherited from Partial<SearchQueryFlags> — no re-declaration needed.
   /** For search target: the search product / tab (default: 'Top'). */
   product?: SearchProduct;
   /** For list target: the Twitter List id to archive. */

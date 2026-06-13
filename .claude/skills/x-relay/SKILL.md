@@ -1,12 +1,14 @@
 # x-relay
 
-A **deep-research tool for X/Twitter** for AI agents — a CLI (`xrelay`), an MCP server, and this skill.
+A **read + archive + write tool for X/Twitter** for AI agents — a CLI (`xrelay`), an MCP server, and this skill.
 Cast a wide net with live search, rank candidates cheaply on engagement/recency metadata, and read full
 threads only for the finalists. Cookies are **auto-extracted from your local browser** (Arc/Chrome/Brave/Edge
 on macOS) — no manual setup. No paid X API.
 
-The tool is **atomic** (search / user / user-posts / thread / bookmarks). YOU compose the strategy. This skill
-gives the **recommended funnel** first, then a per-command reference with cost so you can deviate intelligently.
+The tool covers three surfaces: **read** (search / user / timeline / thread / bookmarks / feed), **archive**
+(full-fidelity capture to rich JSON files), and **write** (post / reply / quote / like / bookmark / retweet /
+follow / delete). YOU compose the strategy. This skill gives the **recommended funnel** first, then a
+per-command reference with cost so you can deviate intelligently.
 
 ---
 
@@ -94,6 +96,14 @@ xrelay my-posts  [-q "<query>"] [--limit N] [--sort ...] [--handle <you>] [--syn
 - `--sync` refreshes the cache first (incremental — only new since last sync). `--live` bypasses the cache and
   hits X. If the cache is empty, the result carries a `hint` telling you to `sync` first.
 
+### `bookmarks folders` — COST: 1 call. List or browse bookmark folders.
+```
+xrelay bookmarks folders               # list your bookmark folders
+xrelay bookmarks folders <folder-id>   # tweets in a specific bookmark folder
+```
+- Without `<folder-id>`: returns `{ folders: [{ id, name, count }] }`.
+- With `<folder-id>`: returns the folder's tweet timeline as `{ tweets[], nextCursor }`.
+
 ### `sync` — COST: medium. Refresh the local cache (incremental).
 ```
 xrelay sync bookmarks|posts|all [--handle <you>] [--repair] [--max N]
@@ -103,18 +113,68 @@ xrelay sync bookmarks|posts|all [--handle <you>] [--repair] [--max N]
   sync). `posts` auto-detects your handle from the session (override/remember with `--handle`). Returns
   `{ source, added, total, watermark }`.
 
+### `whoami` / `status` — COST: 1 call. Check the authenticated session.
+```
+xrelay whoami
+xrelay status   # alias for whoami
+```
+- Returns the authenticated user's profile `{ id, handle, name, bio, verified, followers, ... }`.
+  Use this to confirm your session is valid and see which account is active.
+
+### `likes` — COST: medium. Liked tweets.
+```
+xrelay likes [<handle>] [--limit N]
+```
+- Returns liked tweets for `<handle>` (or the authenticated user when omitted).
+- **Note:** X made others' likes private in June 2024 — only your own likes are accessible. Passing
+  another handle will likely return an empty set. Returns `{ tweets[], nextCursor }`.
+
+### `feed` — COST: medium. Your home timeline.
+```
+xrelay feed [--following] [--limit N]
+```
+- Without `--following`: the algorithmic for-you feed. With `--following`: the chronological
+  following timeline. Returns `{ tweets[], nextCursor }`.
+
 ### `archive` — COST: medium — incremental. Full-fidelity capture.
+
+Shared flags for all archive targets:
 ```
-xrelay archive bookmarks [--out <file.json>] [--limit N] [--full] [--prune] [--stdout]
+[--out <file.json>]   output file (required unless --stdout)
+[--limit N]           cap the number of tweets fetched this run
+[--full]              ignore knownIds, rebuild from scratch up to --limit
+[--prune]             replace the file with exactly the current set (removes deleted items)
+[--stdout]            print archive JSON to stdout instead of writing to disk
+[--since YYYY-MM-DD]  client-side post-filter: keep tweets >= 00:00:00 UTC on that date
 ```
-- Captures bookmarks at full fidelity (rich media, article markdown, quoted tweets, retweet unwrap,
-  ISO timestamps) into a `{ schema, source, generatedAt, count, newestId, tweets:[ArchiveTweet] }` file.
-- Default (incremental): loads the existing `--out` file, uses its ids to stop early (membership stop —
-  correct for bookmark ordering). Only newly-seen tweets count in `added`.
-- `--full`: ignores knownIds, pages up to `--limit` (full rebuild / repair run).
-- `--prune`: replaces the file with exactly the current bookmark set (drops un-bookmarked tweets).
-  Pair with `--full` for a clean snapshot: `xrelay archive bookmarks --out a.json --full --prune`.
-- `--stdout`: prints the archive JSON to stdout instead of writing to disk.
+- `--since` is a client-side post-filter for all targets. For `archive search`, it also folds into the
+  server-side query operator. Tweets with an unparseable date are kept (fail-open).
+
+```
+xrelay archive bookmarks [--out <file.json>] [--limit N] [--full] [--prune] [--stdout] [--since YYYY-MM-DD]
+       xrelay archive bookmarks --folder <folder-id> [--out <file.json>] [--limit N] [--full] [--prune] [--stdout] [--since YYYY-MM-DD]
+       xrelay archive user <handle> [--replies] [--out <file.json>] [--limit N] [--full] [--prune] [--stdout] [--since YYYY-MM-DD]
+       xrelay archive my-posts [--replies] [--out <file.json>] [--limit N] [--full] [--prune] [--stdout] [--since YYYY-MM-DD]
+       xrelay archive search "<query>" [--product Top|Latest|Media|People] [--from <h>] [--since YYYY-MM-DD]
+              [--until YYYY-MM-DD] [--lang xx] [--min-faves N] [--min-retweets N] [--filter <v> ...]
+              [--out <file.json>] [--limit N] [--stdout]
+       xrelay archive list <list-id> [--out <file.json>] [--limit N] [--full] [--prune] [--stdout] [--since YYYY-MM-DD]
+       xrelay archive likes [<handle>] [--out <file.json>] [--limit N] [--full] [--prune] [--stdout] [--since YYYY-MM-DD]
+       xrelay archive feed [--following] [--out <file.json>] [--limit N] [--stdout] [--since YYYY-MM-DD]
+```
+- **bookmarks** (default): captures full-fidelity bookmark set (rich media, article markdown, quoted tweets,
+  retweet unwrap, ISO timestamps) into `{ schema, source, generatedAt, count, newestId, tweets:[ArchiveTweet] }`.
+  Incremental by default (loads existing file, uses its ids to stop early). `--full` ignores knownIds.
+  `--prune` replaces the file with exactly the current bookmark set. Pair with `--full` for a clean snapshot.
+  `--folder <id>`: archive from a specific bookmark folder.
+- **user `<handle>`**: same fidelity, user's timeline. `--replies` includes replies. `--since` post-filters.
+- **my-posts**: archives your own posts (self-detected handle). `--replies` includes replies.
+- **search `"<query>"`**: archives search results. Accepts all advanced search flags. No membership-stop
+  (search order is not id-monotonic); `--since` post-filters client-side and folds into the server query.
+- **list `<list-id>`**: archives tweets from a Twitter List.
+- **likes `[<handle>]`**: archives liked tweets; defaults to your own (own-likes only since June 2024).
+- **feed `[--following]`**: archives your home feed (for-you) or `--following` (chronological). No
+  membership-stop (feed ordering is not id-monotonic); `--since` post-filters client-side.
 - Returns `{ source, out?, added, total, newestId }`.
 
 ### More endpoints
@@ -132,8 +192,6 @@ xrelay article <id|url>                     # a long-form X Article → Markdown
 xrelay media <id|url> [--out <dir>]         # a tweet's image/video URLs; --out downloads the files
 xrelay community <community-id> [--limit N] # a community's tweet feed (topical, moderated sub-network)
 xrelay community-info <community-id>        # community metadata: name, members, rules, topic, creator
-xrelay archive bookmarks [--out <file.json>] [--limit N] [--full] [--prune] [--stdout]
-                                            # full-fidelity capture of your bookmarks to a rich JSON archive
 ```
 
 - **`retweeters`/`followers`/`following`** return `{ users:[<profile>...], nextCursor }` — the
@@ -153,6 +211,49 @@ xrelay archive bookmarks [--out <file.json>] [--limit N] [--full] [--prune] [--s
 
 ---
 
+## Write commands (mutate the live account)
+
+These commands make changes to your X account. They require a valid authenticated session (same cookie
+as read commands). Non-destructive writes (like / bookmark / retweet) are immediately reversible.
+Destructive writes (delete) require `--confirm`.
+
+All write commands return `{ ok, command, data }` on success; the `data` shape varies by command.
+
+### Posting
+```
+xrelay post "<text>"              # post a new tweet. Returns { id, url }
+xrelay reply <id|url> "<text>"    # reply to a tweet. Returns { id, url }
+xrelay quote <id|url> "<text>"    # quote-tweet. Returns { id, url }
+```
+
+### Engagement toggles (reversible)
+```
+xrelay like <id|url>              # like a tweet.    data: { tweetId, action:"liked" }
+xrelay unlike <id|url>            # undo a like.     data: { tweetId, action:"unliked" }
+xrelay bookmark <id|url>          # bookmark a tweet. data: { tweetId, action:"bookmarked" }
+xrelay unbookmark <id|url>        # remove a bookmark. data: { tweetId, action:"unbookmarked" }
+xrelay retweet <id|url>           # retweet.         data: { tweetId, action:"retweeted" }
+xrelay unretweet <id|url>         # undo a retweet.  data: { tweetId, action:"unretweeted" }
+```
+- `bookmark` saves a tweet to your bookmarks (the write operation). To *search* saved bookmarks, use
+  `xrelay bookmarks` (plural, the read/cache command).
+
+### Social graph
+```
+xrelay follow <handle>            # follow a user.   data: { handle, action:"followed" }
+xrelay unfollow <handle>          # unfollow a user. data: { handle, action:"unfollowed" }
+```
+
+### Destructive (requires --confirm)
+```
+xrelay delete <id|url> --confirm  # permanently delete one of your tweets.
+                                  # data: { tweetId, action:"deleted" }
+```
+- Without `--confirm`, returns a `CONFIRMATION_REQUIRED` error and performs NO network call.
+  This is a safety guard — a destructive action never fires by accident.
+
+---
+
 ## Composition notes
 
 - **Dedupe by `id`** across multiple `search` calls — that's your job, not the tool's.
@@ -168,6 +269,7 @@ xrelay archive bookmarks [--out <file.json>] [--limit N] [--full] [--prune] [--s
 - `RATE_LIMITED` — X throttled the token; back off and retry later.
 - `FEATURE_DRIFT` — X rotated its private API; the tool's query-ids/features need a refresh.
 - `NOT_FOUND` — the tweet/user is unavailable, or a transient API hiccup.
+- `CONFIRMATION_REQUIRED` — destructive write attempted without `--confirm`. Re-run with `--confirm` to proceed.
 - `UNKNOWN_COMMAND` — unrecognized command.
 
 ## Setup

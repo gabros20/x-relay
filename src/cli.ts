@@ -45,6 +45,7 @@ import {
   runUserPosts,
   runWhoami,
 } from './commands/index.ts';
+import type { SearchQueryFlags } from './commands/query.ts';
 import { COMMANDS, commandNames } from './commands/registry.ts';
 import { type Engine, createEngine } from './engine/index.ts';
 import type { SearchProduct } from './engine/ops.ts';
@@ -85,6 +86,12 @@ const BOOL_FLAGS = new Set([
 ]);
 /** Single-dash aliases. */
 const SHORT_FLAGS: Record<string, string> = { q: 'query' };
+
+/**
+ * Command name aliases not in the COMMANDS registry.
+ * 'status' is a user-facing alias for 'whoami'.
+ */
+const COMMAND_ALIASES = new Set(['status']);
 
 export interface ParsedArgs {
   command?: string;
@@ -142,7 +149,7 @@ const SORTS = new Set<CacheSort>(['relevance', 'newest', 'oldest', 'likes', 'vie
 /** Advanced search flags shared by `search` command and `archive search` target. */
 function parseSearchFlags(
   parsed: ParsedArgs,
-): Partial<import('./commands/query.ts').SearchQueryFlags> & { product?: SearchProduct } {
+): Partial<SearchQueryFlags> & { product?: SearchProduct } {
   const product = first(parsed, 'product');
   const minFaves = num(parsed, 'min-faves');
   const minRetweets = num(parsed, 'min-retweets');
@@ -243,9 +250,12 @@ function buildSearchOpts(parsed: ParsedArgs): SearchCommandOpts {
 }
 
 /**
- * The simple target-based endpoints (one id/handle + optional limit, or write
- * commands with a positional id and text). Split out of dispatch() to keep each
- * switch small. Returns null when the command isn't one of these.
+ * The simple target-based endpoints (one id/handle + optional limit) plus the
+ * T8–T9 write commands (post / reply / quote / like / unlike / bookmark /
+ * unbookmark). Named dispatchReadOps for historical reasons — it hosts both
+ * read and write commands; T10 writes live in dispatchWriteOps below.
+ * Split out of dispatch() to keep each switch within complexity limits.
+ * Returns null when the command isn't one of these.
  */
 function dispatchReadOps(
   parsed: ParsedArgs,
@@ -413,7 +423,6 @@ export async function run(argv: string[], engine?: Engine): Promise<number> {
     return 0;
   }
   // 'status' is an alias for 'whoami'; allow it through the name guard.
-  const COMMAND_ALIASES = new Set(['status']);
   if (!commandNames.includes(parsed.command) && !COMMAND_ALIASES.has(parsed.command)) {
     process.stdout.write(
       `${toJson(err('cli', 'UNKNOWN_COMMAND', `unknown command: ${parsed.command}`))}\n`,
