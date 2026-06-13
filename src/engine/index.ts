@@ -414,7 +414,7 @@ export interface Engine {
    *
    * @param mediaIds  Up to 4 media_id_string values from uploadMedia() to attach.
    * @returns `{ id, url }` where `id` is the newly-created tweet's snowflake id
-   *   and `url` is its canonical `https://x.com/i/web/status/<id>` permalink.
+   *   and `url` is its canonical `https://x.com/i/status/<id>` permalink.
    */
   post(
     text: string,
@@ -492,6 +492,48 @@ export interface MembershipStop {
   tolerance?: number;
 }
 
+/** State threaded through `collectPageTweets` for the membership-stop bookkeeping. */
+interface CollectState {
+  consecutiveKnown: number;
+}
+
+/**
+ * Drain one page's tweets into `out`, updating `seen` and `state` in-place.
+ * Returns `{ fresh, reachedWatermark, reachedMembershipStop }`.
+ */
+function collectPageTweets(
+  pageTweets: Tweet[],
+  out: Tweet[],
+  seen: Set<string>,
+  state: CollectState,
+  stopAtId: string | undefined,
+  stop: MembershipStop | undefined,
+  membershipTolerance: number,
+): { fresh: number; reachedWatermark: boolean; reachedMembershipStop: boolean } {
+  let fresh = 0;
+  for (const t of pageTweets) {
+    if (stopAtId !== undefined && idLte(t.id, stopAtId)) {
+      return { fresh, reachedWatermark: true, reachedMembershipStop: false };
+    }
+    if (seen.has(t.id)) continue;
+    seen.add(t.id);
+
+    if (stop?.isKnown(t.id)) {
+      // Known tweet — count toward consecutive streak but don't collect.
+      state.consecutiveKnown += 1;
+      if (state.consecutiveKnown >= membershipTolerance) {
+        return { fresh, reachedWatermark: false, reachedMembershipStop: true };
+      }
+    } else {
+      // Fresh (unknown) tweet — reset streak and collect.
+      state.consecutiveKnown = 0;
+      out.push(t);
+      fresh += 1;
+    }
+  }
+  return { fresh, reachedWatermark: false, reachedMembershipStop: false };
+}
+
 /** Follows bottom cursors, de-duping by id, until `limit`, `stopAtId`, `stop`, or exhaustion. */
 async function paginate(
   fetchPage: (cursor?: string) => Promise<TweetPage>,
@@ -503,43 +545,28 @@ async function paginate(
   const seen = new Set<string>();
   let cursor: string | undefined;
   let emptyStreak = 0;
-  let reachedWatermark = false;
   const membershipTolerance = stop?.tolerance ?? 3;
-  let consecutiveKnown = 0;
+  const state: CollectState = { consecutiveKnown: 0 };
+  let reachedWatermark = false;
   let reachedMembershipStop = false;
 
   while (tweets.length < limit && !reachedWatermark && !reachedMembershipStop) {
     const page = await fetchPage(cursor);
-    let fresh = 0;
-    for (const t of page.tweets) {
-      if (stopAtId !== undefined && idLte(t.id, stopAtId)) {
-        reachedWatermark = true;
-        break;
-      }
-      if (seen.has(t.id)) continue;
-      seen.add(t.id);
-
-      if (stop?.isKnown(t.id)) {
-        // Known tweet — count toward consecutive streak but don't collect.
-        consecutiveKnown += 1;
-        if (consecutiveKnown >= membershipTolerance) {
-          reachedMembershipStop = true;
-          break;
-        }
-      } else {
-        // Fresh (unknown) tweet — reset streak and collect.
-        consecutiveKnown = 0;
-        tweets.push(t);
-        fresh += 1;
-      }
-    }
+    let fresh: number;
+    ({ fresh, reachedWatermark, reachedMembershipStop } = collectPageTweets(
+      page.tweets,
+      tweets,
+      seen,
+      state,
+      stopAtId,
+      stop,
+      membershipTolerance,
+    ));
 
     if (reachedWatermark || reachedMembershipStop) break;
-    if (fresh === 0 && stop === undefined) {
-      emptyStreak += 1;
+    if (stop === undefined) {
+      emptyStreak = fresh === 0 ? emptyStreak + 1 : 0;
       if (emptyStreak >= EMPTY_PAGE_TOLERANCE) break;
-    } else if (stop === undefined) {
-      emptyStreak = 0;
     }
 
     if (page.nextCursor === undefined || page.nextCursor === cursor) break;
@@ -995,7 +1022,7 @@ export function createEngine(deps: EngineDeps): Engine {
           create_tweet?: { tweet_results?: { result?: { rest_id?: string } } };
         }
       )?.create_tweet?.tweet_results?.result?.rest_id ?? '';
-    const url = `https://x.com/i/web/status/${id}`;
+    const url = `https://x.com/i/status/${id}`;
     return { id, url };
   }
 

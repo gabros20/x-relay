@@ -1585,6 +1585,78 @@ describe('engine.uploadMedia', () => {
       cleanup(path, dir);
     }
   });
+
+  test('throws MEDIA_UPLOAD_FAILED when APPEND returns non-ok', async () => {
+    const { path, dir } = makeTmpFile('png');
+    let callCount = 0;
+    const failAppendFetch = (async (url: string | URL | Request) => {
+      callCount += 1;
+      const urlStr = String(url);
+      if (urlStr.includes('upload.twitter.com')) {
+        // 1st call: INIT — succeed
+        if (callCount === 1) {
+          return new Response(JSON.stringify({ media_id_string: '42' }), { status: 200 });
+        }
+        // 2nd call: APPEND — fail
+        if (callCount === 2) {
+          return new Response('fail', { status: 500 });
+        }
+      }
+      return new Response('not found', { status: 404 });
+    }) as typeof fetch;
+    const engine = createEngine({
+      cookies,
+      client: { get: async () => ({ ok: true as const, value: {} }) },
+      fetchImpl: failAppendFetch,
+      transaction: async () => 'fake-txid',
+      sleep: async () => {},
+    });
+
+    try {
+      await expect(engine.uploadMedia(path)).rejects.toMatchObject({
+        code: 'MEDIA_UPLOAD_FAILED',
+      });
+    } finally {
+      cleanup(path, dir);
+    }
+  });
+
+  test('throws MEDIA_UPLOAD_FAILED when FINALIZE returns non-ok', async () => {
+    const { path, dir } = makeTmpFile('png');
+    let callCount = 0;
+    const failFinalizeFetch = (async (url: string | URL | Request) => {
+      callCount += 1;
+      const urlStr = String(url);
+      if (urlStr.includes('upload.twitter.com')) {
+        // 1st call: INIT — succeed
+        if (callCount === 1) {
+          return new Response(JSON.stringify({ media_id_string: '42' }), { status: 200 });
+        }
+        // 2nd call: APPEND — succeed (204)
+        if (callCount === 2) {
+          return new Response(null, { status: 204 });
+        }
+        // 3rd call: FINALIZE — fail
+        return new Response('fail', { status: 500 });
+      }
+      return new Response('not found', { status: 404 });
+    }) as typeof fetch;
+    const engine = createEngine({
+      cookies,
+      client: { get: async () => ({ ok: true as const, value: {} }) },
+      fetchImpl: failFinalizeFetch,
+      transaction: async () => 'fake-txid',
+      sleep: async () => {},
+    });
+
+    try {
+      await expect(engine.uploadMedia(path)).rejects.toMatchObject({
+        code: 'MEDIA_UPLOAD_FAILED',
+      });
+    } finally {
+      cleanup(path, dir);
+    }
+  });
 });
 
 // ── engine.post() with mediaIds ───────────────────────────────────────────────
@@ -1728,7 +1800,7 @@ describe('engine.post (CreateTweet)', () => {
     const result = await engine.post('Hello world!');
 
     expect(result.id).toBe('111222333');
-    expect(result.url).toBe('https://x.com/i/web/status/111222333');
+    expect(result.url).toBe('https://x.com/i/status/111222333');
     expect(log).toHaveLength(1);
     expect(log[0]?.op).toBe('CreateTweet');
     // Must include FEATURES blob (withFeatures: true)
@@ -1800,7 +1872,7 @@ describe('engine.post (CreateTweet)', () => {
     const engine = createEngine({ cookies, client, sleep: async () => {} });
     const result = await engine.post('Extract id');
     expect(result.id).toBe('9876543210');
-    expect(result.url).toBe('https://x.com/i/web/status/9876543210');
+    expect(result.url).toBe('https://x.com/i/status/9876543210');
   });
 
   test('propagates EngineError when client.post fails', async () => {

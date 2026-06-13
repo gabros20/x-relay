@@ -17,12 +17,6 @@ import {
 import type { Engine } from '../src/engine/index.ts';
 import { EngineError } from '../src/engine/index.ts';
 
-// Re-export for type check
-type PostSpy2 = (
-  text: string,
-  opts?: { replyToId?: string; quoteTweetId?: string; mediaIds?: string[] },
-) => Promise<{ id: string; url: string }>;
-
 describe('requireConfirmation (destructive-write guard)', () => {
   test('blocks with a CONFIRMATION_REQUIRED envelope when not confirmed', () => {
     const block = requireConfirmation('delete-tweet', {}, 'permanently delete tweet 20');
@@ -558,7 +552,10 @@ describe('runUnfollow', () => {
 /** Minimal Engine stub for image-attachment tests. */
 function fakePostEngineWithUpload(
   uploadSpy: (path: string) => Promise<string>,
-  postSpy: PostSpy2,
+  postSpy: (
+    text: string,
+    opts?: { replyToId?: string; quoteTweetId?: string; mediaIds?: string[] },
+  ) => Promise<{ id: string; url: string }>,
 ): Engine {
   return {
     uploadMedia: uploadSpy,
