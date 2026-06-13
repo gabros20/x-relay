@@ -2,12 +2,17 @@ import { describe, expect, test } from 'bun:test';
 import {
   requireConfirmation,
   runBookmarkAdd,
+  runDelete,
+  runFollow,
   runLike,
   runPost,
   runQuote,
   runReply,
+  runRetweet,
   runUnbookmark,
+  runUnfollow,
   runUnlike,
+  runUnretweet,
 } from '../src/commands/runners.ts';
 import type { Engine } from '../src/engine/index.ts';
 import { EngineError } from '../src/engine/index.ts';
@@ -312,5 +317,232 @@ describe('runUnbookmark', () => {
     expect(env.ok).toBe(false);
     if (env.ok) throw new Error('expected failure');
     expect(env.error.code).toBe('ALREADY_DONE');
+  });
+});
+
+// ── runRetweet / runUnretweet ─────────────────────────────────────────────────
+
+/** Builds a minimal Engine stub whose retweet/unretweet methods delegate to spies. */
+function fakeRetweetEngine(overrides: Partial<Engine>): Engine {
+  const base: Partial<Engine> = {
+    retweet: async () => {},
+    unretweet: async () => {},
+  };
+  return { ...base, ...overrides } as unknown as Engine;
+}
+
+describe('runRetweet', () => {
+  test('INVALID_INPUT on empty tweetId', async () => {
+    const engine = fakeRetweetEngine({});
+    const env = await runRetweet(engine, '');
+    expect(env.ok).toBe(false);
+    if (env.ok) throw new Error('expected failure');
+    expect(env.error.code).toBe('INVALID_INPUT');
+  });
+
+  test('happy path: calls engine.retweet() and returns { tweetId, action: "retweeted" }', async () => {
+    let captured: string | undefined;
+    const engine = fakeRetweetEngine({
+      retweet: async (id) => {
+        captured = id;
+      },
+    });
+    const env = await runRetweet(engine, '111222333');
+    expect(env.ok).toBe(true);
+    if (!env.ok) throw new Error('expected success');
+    expect(env.data.tweetId).toBe('111222333');
+    expect(env.data.action).toBe('retweeted');
+    expect(captured).toBe('111222333');
+  });
+
+  test('surfaces ALREADY_DONE as an error envelope when already retweeted', async () => {
+    const engine = fakeRetweetEngine({
+      retweet: async () => {
+        throw new EngineError('ALREADY_DONE', 'already retweeted');
+      },
+    });
+    const env = await runRetweet(engine, '1');
+    expect(env.ok).toBe(false);
+    if (env.ok) throw new Error('expected failure');
+    expect(env.error.code).toBe('ALREADY_DONE');
+  });
+});
+
+describe('runUnretweet', () => {
+  test('INVALID_INPUT on empty tweetId', async () => {
+    const engine = fakeRetweetEngine({});
+    const env = await runUnretweet(engine, '');
+    expect(env.ok).toBe(false);
+    if (env.ok) throw new Error('expected failure');
+    expect(env.error.code).toBe('INVALID_INPUT');
+  });
+
+  test('happy path: calls engine.unretweet() and returns { tweetId, action: "unretweeted" }', async () => {
+    let captured: string | undefined;
+    const engine = fakeRetweetEngine({
+      unretweet: async (id) => {
+        captured = id;
+      },
+    });
+    const env = await runUnretweet(engine, '444555666');
+    expect(env.ok).toBe(true);
+    if (!env.ok) throw new Error('expected success');
+    expect(env.data.tweetId).toBe('444555666');
+    expect(env.data.action).toBe('unretweeted');
+    expect(captured).toBe('444555666');
+  });
+});
+
+// ── runDelete ─────────────────────────────────────────────────────────────────
+
+describe('runDelete', () => {
+  function fakeDeleteEngine(deleteSpy?: (id: string) => Promise<void>): Engine {
+    const calls: string[] = [];
+    return {
+      deleteTweet:
+        deleteSpy ??
+        (async (id) => {
+          calls.push(id);
+        }),
+    } as unknown as Engine;
+  }
+
+  test('INVALID_INPUT on empty tweetId', async () => {
+    const engine = fakeDeleteEngine();
+    const env = await runDelete(engine, '', {});
+    expect(env.ok).toBe(false);
+    if (env.ok) throw new Error('expected failure');
+    expect(env.error.code).toBe('INVALID_INPUT');
+  });
+
+  test('CONFIRMATION_REQUIRED when confirmed is not set — engine.deleteTweet NOT called', async () => {
+    let called = false;
+    const engine = fakeDeleteEngine(async () => {
+      called = true;
+    });
+    const env = await runDelete(engine, '999', {});
+    expect(env.ok).toBe(false);
+    if (env.ok) throw new Error('expected failure');
+    expect(env.error.code).toBe('CONFIRMATION_REQUIRED');
+    expect(called).toBe(false);
+  });
+
+  test('CONFIRMATION_REQUIRED when confirmed is explicitly false — engine.deleteTweet NOT called', async () => {
+    let called = false;
+    const engine = fakeDeleteEngine(async () => {
+      called = true;
+    });
+    const env = await runDelete(engine, '999', { confirmed: false });
+    expect(env.ok).toBe(false);
+    if (env.ok) throw new Error('expected failure');
+    expect(env.error.code).toBe('CONFIRMATION_REQUIRED');
+    expect(called).toBe(false);
+  });
+
+  test('happy path: with confirmed=true calls engine.deleteTweet and returns { tweetId, action: "deleted" }', async () => {
+    let captured: string | undefined;
+    const engine = fakeDeleteEngine(async (id) => {
+      captured = id;
+    });
+    const env = await runDelete(engine, '55544433', { confirmed: true });
+    expect(env.ok).toBe(true);
+    if (!env.ok) throw new Error('expected success');
+    expect(env.data.tweetId).toBe('55544433');
+    expect(env.data.action).toBe('deleted');
+    expect(captured).toBe('55544433');
+  });
+
+  test('maps EngineError to an error envelope (with confirmed)', async () => {
+    const engine = fakeDeleteEngine(async () => {
+      throw new EngineError('WRITE_FAILED', 'not found');
+    });
+    const env = await runDelete(engine, '1', { confirmed: true });
+    expect(env.ok).toBe(false);
+    if (env.ok) throw new Error('expected failure');
+    expect(env.error.code).toBe('WRITE_FAILED');
+  });
+});
+
+// ── runFollow / runUnfollow ───────────────────────────────────────────────────
+
+function fakeFollowEngine(overrides: Partial<Engine>): Engine {
+  const base: Partial<Engine> = {
+    follow: async () => {},
+    unfollow: async () => {},
+  };
+  return { ...base, ...overrides } as unknown as Engine;
+}
+
+describe('runFollow', () => {
+  test('INVALID_INPUT on empty handle', async () => {
+    const engine = fakeFollowEngine({});
+    const env = await runFollow(engine, '');
+    expect(env.ok).toBe(false);
+    if (env.ok) throw new Error('expected failure');
+    expect(env.error.code).toBe('INVALID_INPUT');
+  });
+
+  test('happy path: calls engine.follow() and returns { handle, action: "followed" }', async () => {
+    let captured: string | undefined;
+    const engine = fakeFollowEngine({
+      follow: async (h) => {
+        captured = h;
+      },
+    });
+    const env = await runFollow(engine, 'jack');
+    expect(env.ok).toBe(true);
+    if (!env.ok) throw new Error('expected success');
+    expect(env.data.handle).toBe('jack');
+    expect(env.data.action).toBe('followed');
+    expect(captured).toBe('jack');
+  });
+
+  test('surfaces NOT_FOUND as an error envelope', async () => {
+    const engine = fakeFollowEngine({
+      follow: async () => {
+        throw new EngineError('NOT_FOUND', 'user not found');
+      },
+    });
+    const env = await runFollow(engine, 'ghost');
+    expect(env.ok).toBe(false);
+    if (env.ok) throw new Error('expected failure');
+    expect(env.error.code).toBe('NOT_FOUND');
+  });
+});
+
+describe('runUnfollow', () => {
+  test('INVALID_INPUT on empty handle', async () => {
+    const engine = fakeFollowEngine({});
+    const env = await runUnfollow(engine, '');
+    expect(env.ok).toBe(false);
+    if (env.ok) throw new Error('expected failure');
+    expect(env.error.code).toBe('INVALID_INPUT');
+  });
+
+  test('happy path: calls engine.unfollow() and returns { handle, action: "unfollowed" }', async () => {
+    let captured: string | undefined;
+    const engine = fakeFollowEngine({
+      unfollow: async (h) => {
+        captured = h;
+      },
+    });
+    const env = await runUnfollow(engine, 'jack');
+    expect(env.ok).toBe(true);
+    if (!env.ok) throw new Error('expected success');
+    expect(env.data.handle).toBe('jack');
+    expect(env.data.action).toBe('unfollowed');
+    expect(captured).toBe('jack');
+  });
+
+  test('surfaces NOT_FOUND as an error envelope', async () => {
+    const engine = fakeFollowEngine({
+      unfollow: async () => {
+        throw new EngineError('NOT_FOUND', 'user not found');
+      },
+    });
+    const env = await runUnfollow(engine, 'ghost');
+    expect(env.ok).toBe(false);
+    if (env.ok) throw new Error('expected failure');
+    expect(env.error.code).toBe('NOT_FOUND');
   });
 });

@@ -15,7 +15,9 @@ import {
   runBookmarks,
   runCommunity,
   runCommunityInfo,
+  runDelete,
   runFeed,
+  runFollow,
   runFollowers,
   runFollowing,
   runLike,
@@ -28,13 +30,16 @@ import {
   runQuote,
   runQuoters,
   runReply,
+  runRetweet,
   runRetweeters,
   runSearch,
   runSync,
   runThread,
   runTrends,
   runUnbookmark,
+  runUnfollow,
   runUnlike,
+  runUnretweet,
   runUser,
   runUserMedia,
   runUserPosts,
@@ -76,6 +81,7 @@ const BOOL_FLAGS = new Set([
   'prune',
   'stdout',
   'following',
+  'confirm',
 ]);
 /** Single-dash aliases. */
 const SHORT_FLAGS: Record<string, string> = { q: 'query' };
@@ -304,6 +310,35 @@ function dispatchReadOps(
       return runBookmarkAdd(engine, extractTweetId(target) ?? target);
     case 'unbookmark':
       return runUnbookmark(engine, extractTweetId(target) ?? target);
+    default:
+      return dispatchWriteOps(parsed, engine, command, target);
+  }
+}
+
+/**
+ * T10 write commands (retweet / unretweet / delete / follow / unfollow).
+ * Split out of dispatchReadOps to keep cognitive complexity within limits.
+ * Returns null when the command isn't one of these.
+ */
+function dispatchWriteOps(
+  parsed: ParsedArgs,
+  engine: Engine,
+  command: string | undefined,
+  target: string,
+): Promise<Envelope<unknown>> | null {
+  switch (command) {
+    case 'retweet':
+      return runRetweet(engine, extractTweetId(target) ?? target);
+    case 'unretweet':
+      return runUnretweet(engine, extractTweetId(target) ?? target);
+    case 'delete':
+      return runDelete(engine, extractTweetId(target) ?? target, {
+        confirmed: parsed.bools.has('confirm'),
+      });
+    case 'follow':
+      return runFollow(engine, extractHandle(target) ?? target);
+    case 'unfollow':
+      return runUnfollow(engine, extractHandle(target) ?? target);
     default:
       return null;
   }

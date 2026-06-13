@@ -31,6 +31,11 @@ export {
   runUnlike,
   runBookmarkAdd,
   runUnbookmark,
+  runRetweet,
+  runUnretweet,
+  runDelete,
+  runFollow,
+  runUnfollow,
   type SearchCommandOpts,
   type UserPostsCommandOpts,
   type CacheViewOpts,
@@ -40,5 +45,6 @@ export {
   type ArchiveResult,
   type PostResult,
   type ToggleResult,
+  type FollowResult,
 } from './runners.ts';
 export { buildSearchQuery, type SearchQueryFlags } from './query.ts';

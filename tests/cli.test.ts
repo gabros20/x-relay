@@ -99,6 +99,21 @@ function fakeEngine(calls: string[]): Engine {
     async unbookmark(tweetId: string): Promise<void> {
       calls.push(`unbookmark:${tweetId}`);
     },
+    async retweet(tweetId: string): Promise<void> {
+      calls.push(`retweet:${tweetId}`);
+    },
+    async unretweet(tweetId: string): Promise<void> {
+      calls.push(`unretweet:${tweetId}`);
+    },
+    async deleteTweet(tweetId: string): Promise<void> {
+      calls.push(`deleteTweet:${tweetId}`);
+    },
+    async follow(handle: string): Promise<void> {
+      calls.push(`follow:${handle}`);
+    },
+    async unfollow(handle: string): Promise<void> {
+      calls.push(`unfollow:${handle}`);
+    },
   };
 }
 
@@ -250,5 +265,42 @@ describe('dispatch', () => {
     const eng = fakeEngine(calls);
     await dispatch(parseArgs(['bookmark', 'https://x.com/user/status/99988877']), eng);
     expect(calls[0]).toBe('bookmark:99988877');
+  });
+
+  test('retweet / unretweet dispatch to correct engine methods with extracted ids', async () => {
+    const calls: string[] = [];
+    const eng = fakeEngine(calls);
+    await dispatch(parseArgs(['retweet', '111222333']), eng);
+    await dispatch(parseArgs(['unretweet', 'https://x.com/user/status/444555666']), eng);
+    expect(calls).toEqual(['retweet:111222333', 'unretweet:444555666']);
+  });
+
+  test('delete without --confirm returns CONFIRMATION_REQUIRED (engine.deleteTweet not called)', async () => {
+    const calls: string[] = [];
+    const eng = fakeEngine(calls);
+    const env = await dispatch(parseArgs(['delete', '99988877']), eng);
+    expect(env.ok).toBe(false);
+    if (env.ok) throw new Error('expected failure');
+    expect(env.error.code).toBe('CONFIRMATION_REQUIRED');
+    expect(calls.some((c) => c.startsWith('deleteTweet:'))).toBe(false);
+  });
+
+  test('delete with --confirm calls engine.deleteTweet with extracted tweet id', async () => {
+    const calls: string[] = [];
+    const eng = fakeEngine(calls);
+    const env = await dispatch(
+      parseArgs(['delete', 'https://x.com/user/status/55544433', '--confirm']),
+      eng,
+    );
+    expect(env.ok).toBe(true);
+    expect(calls).toContain('deleteTweet:55544433');
+  });
+
+  test('follow / unfollow dispatch to correct engine methods', async () => {
+    const calls: string[] = [];
+    const eng = fakeEngine(calls);
+    await dispatch(parseArgs(['follow', 'jack']), eng);
+    await dispatch(parseArgs(['unfollow', 'elonmusk']), eng);
+    expect(calls).toEqual(['follow:jack', 'unfollow:elonmusk']);
   });
 });

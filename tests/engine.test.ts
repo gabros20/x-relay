@@ -1711,3 +1711,156 @@ describe('engine.like / unlike / bookmark / unbookmark', () => {
     await expect(engine.bookmark('1')).rejects.toMatchObject({ code: 'ALREADY_DONE' });
   });
 });
+
+// ── engine.retweet / unretweet / deleteTweet ─────────────────────────────────
+
+describe('engine.retweet / unretweet / deleteTweet', () => {
+  /** A write-capable fake that records every post() call. */
+  function writeClient(
+    result: ClientResult,
+    log: Array<{ op: string; body: MutationBody }>,
+  ): EngineClient {
+    return {
+      get: async () => ({ ok: true as const, value: {} }),
+      post: async (op: OpName, body: MutationBody) => {
+        log.push({ op, body });
+        return result;
+      },
+    };
+  }
+
+  test('retweet sends CreateRetweet with { tweet_id, dark_request: false }', async () => {
+    const log: Array<{ op: string; body: MutationBody }> = [];
+    const client = writeClient({ ok: true, value: { data: {} } }, log);
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+
+    await engine.retweet('12345');
+
+    expect(log).toHaveLength(1);
+    expect(log[0]?.op).toBe('CreateRetweet');
+    expect(log[0]?.body.variables).toEqual({ tweet_id: '12345', dark_request: false });
+    expect(log[0]?.body.features).toBeUndefined();
+  });
+
+  test('unretweet sends DeleteRetweet with { source_tweet_id, dark_request: false } (NOT tweet_id)', async () => {
+    const log: Array<{ op: string; body: MutationBody }> = [];
+    const client = writeClient({ ok: true, value: { data: {} } }, log);
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+
+    await engine.unretweet('99988877');
+
+    expect(log).toHaveLength(1);
+    expect(log[0]?.op).toBe('DeleteRetweet');
+    // CRITICAL: key is source_tweet_id, NOT tweet_id
+    expect(log[0]?.body.variables).toEqual({ source_tweet_id: '99988877', dark_request: false });
+    expect((log[0]?.body.variables as Record<string, unknown>).tweet_id).toBeUndefined();
+    expect(log[0]?.body.features).toBeUndefined();
+  });
+
+  test('deleteTweet sends DeleteTweet with { tweet_id, dark_request: false }', async () => {
+    const log: Array<{ op: string; body: MutationBody }> = [];
+    const client = writeClient({ ok: true, value: { data: {} } }, log);
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+
+    await engine.deleteTweet('55544433');
+
+    expect(log).toHaveLength(1);
+    expect(log[0]?.op).toBe('DeleteTweet');
+    expect(log[0]?.body.variables).toEqual({ tweet_id: '55544433', dark_request: false });
+    expect(log[0]?.body.features).toBeUndefined();
+  });
+
+  test('retweet throws ALREADY_DONE when already retweeted (code 327)', async () => {
+    const client = writeClient(
+      {
+        ok: true,
+        value: { errors: [{ code: 327, message: 'You have already retweeted this Tweet.' }] },
+      },
+      [],
+    );
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    await expect(engine.retweet('1')).rejects.toMatchObject({ code: 'ALREADY_DONE' });
+  });
+});
+
+// ── engine.follow / unfollow ─────────────────────────────────────────────────
+
+describe('engine.follow / unfollow', () => {
+  /** A fake that serves a UserByScreenName lookup returning a specific userId,
+   * and records friendshipAction calls via a fake fetchImpl. */
+  function followFakes(userId: string, handle: string) {
+    const friendshipCalls: Array<{ url: string; body: string }> = [];
+    const client = fakeClientByOp({
+      UserByScreenName: { _start: userByScreenNameResponse(userId, handle) },
+    });
+    const fakeFetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      friendshipCalls.push({ url: String(url), body: String(init?.body ?? '') });
+      return new Response(JSON.stringify({ id_str: userId }), { status: 200 });
+    }) as typeof fetch;
+    return { client, fakeFetch, friendshipCalls };
+  }
+
+  test('follow resolves handle to userId via getUser and calls friendshipAction create', async () => {
+    const { client, fakeFetch, friendshipCalls } = followFakes('44196397', 'jack');
+    const engine = createEngine({
+      cookies,
+      client,
+      fetchImpl: fakeFetch,
+      transaction: async () => 'fake-txid',
+      sleep: async () => {},
+    });
+
+    await engine.follow('jack');
+
+    expect(friendshipCalls).toHaveLength(1);
+    expect(friendshipCalls[0]?.url).toBe('https://x.com/i/api/1.1/friendships/create.json');
+    expect(friendshipCalls[0]?.body).toContain('user_id=44196397');
+  });
+
+  test('unfollow resolves handle to userId via getUser and calls friendshipAction destroy', async () => {
+    const { client, fakeFetch, friendshipCalls } = followFakes('44196397', 'jack');
+    const engine = createEngine({
+      cookies,
+      client,
+      fetchImpl: fakeFetch,
+      transaction: async () => 'fake-txid',
+      sleep: async () => {},
+    });
+
+    await engine.unfollow('jack');
+
+    expect(friendshipCalls).toHaveLength(1);
+    expect(friendshipCalls[0]?.url).toBe('https://x.com/i/api/1.1/friendships/destroy.json');
+    expect(friendshipCalls[0]?.body).toContain('user_id=44196397');
+  });
+
+  test('follow throws NOT_FOUND when handle does not exist', async () => {
+    const client = fakeClientByOp({
+      UserByScreenName: {
+        _start: { data: { user: { result: { __typename: 'UserUnavailable' } } } },
+      },
+    });
+    const engine = createEngine({
+      cookies,
+      client,
+      transaction: async () => 'fake-txid',
+      sleep: async () => {},
+    });
+    await expect(engine.follow('ghost')).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  test('unfollow throws NOT_FOUND when handle does not exist', async () => {
+    const client = fakeClientByOp({
+      UserByScreenName: {
+        _start: { data: { user: { result: { __typename: 'UserUnavailable' } } } },
+      },
+    });
+    const engine = createEngine({
+      cookies,
+      client,
+      transaction: async () => 'fake-txid',
+      sleep: async () => {},
+    });
+    await expect(engine.unfollow('ghost')).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+});

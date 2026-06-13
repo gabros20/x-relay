@@ -215,6 +215,36 @@ export const COMMANDS: CommandDef[] = [
     summary: 'Remove a bookmark.',
     usage: 'xrelay unbookmark <id|url>',
   },
+  {
+    name: 'retweet',
+    cost: '1 call — write',
+    summary: 'Retweet a tweet. Reversible — unretweet to undo.',
+    usage: 'xrelay retweet <id|url>',
+  },
+  {
+    name: 'unretweet',
+    cost: '1 call — write',
+    summary: 'Undo a retweet.',
+    usage: 'xrelay unretweet <id|url>',
+  },
+  {
+    name: 'delete',
+    cost: '1 call — write',
+    summary: 'Permanently delete one of your tweets. Requires --confirm (destructive).',
+    usage: 'xrelay delete <id|url> --confirm',
+  },
+  {
+    name: 'follow',
+    cost: '1 call — write',
+    summary: 'Follow a user. Reversible — unfollow to undo.',
+    usage: 'xrelay follow <handle>',
+  },
+  {
+    name: 'unfollow',
+    cost: '1 call — write',
+    summary: 'Unfollow a user.',
+    usage: 'xrelay unfollow <handle>',
+  },
 ];
 
 export const commandNames: string[] = COMMANDS.map((c) => c.name);

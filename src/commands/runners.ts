@@ -722,7 +722,20 @@ export function runQuote(
 /** Result returned by the like / unlike / bookmark / unbookmark runners. */
 export interface ToggleResult {
   tweetId: string;
-  action: 'liked' | 'unliked' | 'bookmarked' | 'unbookmarked';
+  action:
+    | 'liked'
+    | 'unliked'
+    | 'bookmarked'
+    | 'unbookmarked'
+    | 'retweeted'
+    | 'unretweeted'
+    | 'deleted';
+}
+
+/** Result returned by the follow / unfollow runners. */
+export interface FollowResult {
+  handle: string;
+  action: 'followed' | 'unfollowed';
 }
 
 /**
@@ -775,6 +788,81 @@ export function runUnbookmark(engine: Engine, tweetId: string): Promise<Envelope
   return guard('unbookmark', async () => {
     await engine.unbookmark(tweetId);
     return { tweetId, action: 'unbookmarked' as const };
+  });
+}
+
+/**
+ * Retweet a tweet.
+ * Returns INVALID_INPUT when `tweetId` is empty.
+ * ALREADY_DONE from the engine surfaces as an error envelope via guard().
+ */
+export function runRetweet(engine: Engine, tweetId: string): Promise<Envelope<ToggleResult>> {
+  if (!tweetId) return Promise.resolve(err('retweet', 'INVALID_INPUT', 'missing tweet id'));
+  return guard('retweet', async () => {
+    await engine.retweet(tweetId);
+    return { tweetId, action: 'retweeted' as const };
+  });
+}
+
+/**
+ * Undo a retweet.
+ * Returns INVALID_INPUT when `tweetId` is empty.
+ * ALREADY_DONE from the engine surfaces as an error envelope via guard().
+ */
+export function runUnretweet(engine: Engine, tweetId: string): Promise<Envelope<ToggleResult>> {
+  if (!tweetId) return Promise.resolve(err('unretweet', 'INVALID_INPUT', 'missing tweet id'));
+  return guard('unretweet', async () => {
+    await engine.unretweet(tweetId);
+    return { tweetId, action: 'unretweeted' as const };
+  });
+}
+
+/**
+ * Permanently delete a tweet.
+ * DESTRUCTIVE — requires explicit confirmation via the `requireConfirmation` guard.
+ * Without `opts.confirmed === true` returns a CONFIRMATION_REQUIRED envelope and
+ * performs NO network call. Only when confirmed does it call engine.deleteTweet().
+ *
+ * @param tweetId  The snowflake id of the tweet to delete.
+ * @param opts     Must include `confirmed: true` to proceed.
+ */
+export function runDelete(
+  engine: Engine,
+  tweetId: string,
+  opts: ConfirmableOpts,
+): Promise<Envelope<ToggleResult>> {
+  if (!tweetId) return Promise.resolve(err('delete', 'INVALID_INPUT', 'missing tweet id'));
+  const block = requireConfirmation('delete', opts, `delete tweet ${tweetId}`);
+  if (block) return Promise.resolve(block);
+  return guard('delete', async () => {
+    await engine.deleteTweet(tweetId);
+    return { tweetId, action: 'deleted' as const };
+  });
+}
+
+/**
+ * Follow a user.
+ * Returns INVALID_INPUT when `handle` is empty.
+ * NOT_FOUND from the engine surfaces as an error envelope via guard().
+ */
+export function runFollow(engine: Engine, handle: string): Promise<Envelope<FollowResult>> {
+  if (!handle) return Promise.resolve(err('follow', 'INVALID_INPUT', 'missing handle'));
+  return guard('follow', async () => {
+    await engine.follow(handle);
+    return { handle, action: 'followed' as const };
+  });
+}
+
+/**
+ * Unfollow a user.
+ * Returns INVALID_INPUT when `handle` is empty.
+ * NOT_FOUND from the engine surfaces as an error envelope via guard().
+ */
+export function runUnfollow(engine: Engine, handle: string): Promise<Envelope<FollowResult>> {
+  if (!handle) return Promise.resolve(err('unfollow', 'INVALID_INPUT', 'missing handle'));
+  return guard('unfollow', async () => {
+    await engine.unfollow(handle);
+    return { handle, action: 'unfollowed' as const };
   });
 }
 

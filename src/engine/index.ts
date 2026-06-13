@@ -350,6 +350,48 @@ export interface Engine {
    */
   unbookmark(tweetId: string): Promise<void>;
   /**
+   * Retweet a tweet (CreateRetweet mutation).
+   * Reversible — no confirmation required.
+   * Throws ALREADY_DONE (via mutate) when the tweet is already retweeted.
+   *
+   * @param tweetId  The snowflake id of the tweet to retweet.
+   */
+  retweet(tweetId: string): Promise<void>;
+  /**
+   * Undo a retweet (DeleteRetweet mutation).
+   * Reversible — no confirmation required.
+   * Note: uses `source_tweet_id` (not `tweet_id`) as the mutation variable key.
+   *
+   * @param tweetId  The snowflake id of the original tweet to un-retweet.
+   */
+  unretweet(tweetId: string): Promise<void>;
+  /**
+   * Permanently delete a tweet (DeleteTweet mutation).
+   * DESTRUCTIVE — requires explicit confirmation via the `requireConfirmation` guard
+   * in the runner before this engine method is called.
+   *
+   * @param tweetId  The snowflake id of the tweet to delete.
+   */
+  deleteTweet(tweetId: string): Promise<void>;
+  /**
+   * Follow a user account.
+   * Resolves the user id via getUser(handle) — throws NOT_FOUND if the handle
+   * does not exist. Then calls friendshipAction('create', userId).
+   * Reversible — no confirmation required.
+   *
+   * @param handle  The @handle (without @) of the user to follow.
+   */
+  follow(handle: string): Promise<void>;
+  /**
+   * Unfollow a user account.
+   * Resolves the user id via getUser(handle) — throws NOT_FOUND if the handle
+   * does not exist. Then calls friendshipAction('destroy', userId).
+   * Reversible — no confirmation required.
+   *
+   * @param handle  The @handle (without @) of the user to unfollow.
+   */
+  unfollow(handle: string): Promise<void>;
+  /**
    * Create a tweet (post, reply, or quote).
    *
    * - Plain post: `engine.post('Hello world!')`
@@ -860,6 +902,31 @@ export function createEngine(deps: EngineDeps): Engine {
 
     async unbookmark(tweetId) {
       await mutate('DeleteBookmark', { tweet_id: tweetId });
+    },
+
+    async retweet(tweetId) {
+      await mutate('CreateRetweet', { tweet_id: tweetId, dark_request: false });
+    },
+
+    async unretweet(tweetId) {
+      // NOTE: DeleteRetweet uses `source_tweet_id`, NOT `tweet_id`.
+      await mutate('DeleteRetweet', { source_tweet_id: tweetId, dark_request: false });
+    },
+
+    async deleteTweet(tweetId) {
+      await mutate('DeleteTweet', { tweet_id: tweetId, dark_request: false });
+    },
+
+    async follow(handle) {
+      const profile = await getUser(handle);
+      if (!profile) throw new EngineError('NOT_FOUND', `user @${handle} not found`);
+      await friendshipAction('create', profile.id);
+    },
+
+    async unfollow(handle) {
+      const profile = await getUser(handle);
+      if (!profile) throw new EngineError('NOT_FOUND', `user @${handle} not found`);
+      await friendshipAction('destroy', profile.id);
     },
 
     async search(query, opts) {
