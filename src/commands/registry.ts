@@ -135,13 +135,21 @@ export const COMMANDS: CommandDef[] = [
     cost: 'medium — incremental',
     summary: 'Full-fidelity capture of bookmarks or a user timeline to a rich JSON archive.',
     usage:
-      'xrelay archive bookmarks [--out <file.json>] [--limit N] [--full] [--prune] [--stdout]\n' +
-      '       xrelay archive user <handle> [--replies] [--out <file.json>] [--limit N] [--full] [--prune] [--stdout]\n' +
-      '       xrelay archive my-posts [--replies] [--out <file.json>] [--limit N] [--full] [--prune] [--stdout]\n' +
+      'xrelay archive bookmarks [--out <file.json>] [--limit N] [--full] [--prune] [--stdout] [--since YYYY-MM-DD]\n' +
+      '       xrelay archive user <handle> [--replies] [--out <file.json>] [--limit N] [--full] [--prune] [--stdout] [--since YYYY-MM-DD]\n' +
+      '       xrelay archive my-posts [--replies] [--out <file.json>] [--limit N] [--full] [--prune] [--stdout] [--since YYYY-MM-DD]\n' +
       '       xrelay archive search "<query>" [--product Top|Latest|Media|People] [--from <h>] [--since YYYY-MM-DD]\n' +
       '              [--until YYYY-MM-DD] [--lang xx] [--min-faves N] [--min-retweets N] [--filter <v> ...]\n' +
       '              [--out <file.json>] [--limit N] [--stdout]\n' +
-      '       xrelay archive list <list-id> [--out <file.json>] [--limit N] [--full] [--prune] [--stdout]',
+      '       xrelay archive list <list-id> [--out <file.json>] [--limit N] [--full] [--prune] [--stdout] [--since YYYY-MM-DD]\n' +
+      '       Note: --since YYYY-MM-DD is a client-side post-filter (keeps tweets >= 00:00:00 UTC on that date).\n' +
+      '             For search, --since also folds into the server-side query operator.',
+  },
+  {
+    name: 'whoami',
+    cost: '1 call',
+    summary: 'The authenticated user (handle + profile).  Alias: status.',
+    usage: 'xrelay whoami',
   },
 ];
 

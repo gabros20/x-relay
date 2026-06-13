@@ -28,6 +28,7 @@ import {
   runUser,
   runUserMedia,
   runUserPosts,
+  runWhoami,
 } from './commands/index.ts';
 import { COMMANDS, commandNames } from './commands/registry.ts';
 import { type Engine, createEngine } from './engine/index.ts';
@@ -286,6 +287,9 @@ export async function dispatch(parsed: ParsedArgs, engine: Engine): Promise<Enve
     }
     case 'archive':
       return runArchive(engine, buildArchiveOpts(parsed));
+    case 'whoami':
+    case 'status':
+      return runWhoami(engine);
     default:
       return (
         dispatchReadOps(parsed, engine, command, target) ??
@@ -300,7 +304,9 @@ export async function run(argv: string[], engine?: Engine): Promise<number> {
     process.stdout.write(`${helpText()}\n`);
     return 0;
   }
-  if (!commandNames.includes(parsed.command)) {
+  // 'status' is an alias for 'whoami'; allow it through the name guard.
+  const COMMAND_ALIASES = new Set(['status']);
+  if (!commandNames.includes(parsed.command) && !COMMAND_ALIASES.has(parsed.command)) {
     process.stdout.write(
       `${toJson(err('cli', 'UNKNOWN_COMMAND', `unknown command: ${parsed.command}`))}\n`,
     );

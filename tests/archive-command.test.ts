@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runArchive } from '../src/commands/runners.ts';
+import { runArchive, runWhoami } from '../src/commands/runners.ts';
 import { type Engine, EngineError } from '../src/engine/index.ts';
 import type {
   ArchiveTweet,
@@ -54,6 +54,8 @@ interface FakeEngineOpts {
   meHandle?: string | null;
   /** When set, archiveUserPosts throws this EngineError code. */
   userPostsError?: string;
+  /** Canned profile for whoami(). Defaults to a minimal profile when meHandle is set. */
+  whoamiProfile?: UserProfile | null;
 }
 
 /** A fake Engine that returns fixed sets of ArchiveTweets per archive target. */
@@ -133,6 +135,21 @@ function fakeEngine(archiveTweetsOrOpts: ArchiveTweet[] | FakeEngineOpts): Engin
     },
     async me(): Promise<string | null> {
       return opts.meHandle !== undefined ? opts.meHandle : 'me';
+    },
+    async whoami(): Promise<UserProfile | null> {
+      if ('whoamiProfile' in opts) return opts.whoamiProfile ?? null;
+      const handle = opts.meHandle !== undefined ? opts.meHandle : 'me';
+      if (!handle) return null;
+      return {
+        id: '1',
+        handle,
+        name: handle,
+        verified: false,
+        followers: 0,
+        following: 0,
+        tweets: 0,
+        url: `https://x.com/${handle}`,
+      };
     },
   };
 }
@@ -576,5 +593,135 @@ describe('runArchive — list target', () => {
     expect(env.ok).toBe(false);
     if (env.ok) return;
     expect(env.error.code).toBe('INVALID_INPUT');
+  });
+});
+
+// ── archive --since filter ────────────────────────────────────────────────────
+
+/** Make an ArchiveTweet with a Twitter-format createdAt for date-filter tests. */
+function makeArchivedTweetWithDate(id: string, createdAt: string): ArchiveTweet {
+  return { ...makeArchiveTweet(id), createdAt };
+}
+
+describe('runArchive — --since post-filter (shared core)', () => {
+  // Tweets spanning 2026-06-01 through 2026-06-10, all UTC (+0000).
+  // We use "Mon Jun 01 00:00:00 +0000 2026" through "Wed Jun 10 00:00:00 +0000 2026".
+  // Cutoff: --since 2026-06-05 → keep >= 2026-06-05T00:00:00Z (inclusive).
+
+  const OLD_TWEET = makeArchivedTweetWithDate('1000', 'Sun May 31 23:59:59 +0000 2026'); // before cutoff
+  const BOUNDARY_TWEET = makeArchivedTweetWithDate('2000', 'Mon Jun 01 00:00:00 +0000 2026'); // exactly on cutoff — kept
+  const NEW_TWEET = makeArchivedTweetWithDate('3000', 'Tue Jun 10 12:00:00 +0000 2026'); // after cutoff — kept
+  const NO_DATE_TWEET = makeArchiveTweet('4000'); // no createdAt — kept (fail-open)
+
+  test('drops tweets older than --since, keeps boundary-inclusive and unparseable', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'xrelay-arc-since-'));
+    const out = join(dir, 'archive.json');
+
+    const engine = fakeEngine({
+      bookmarks: [NEW_TWEET, BOUNDARY_TWEET, OLD_TWEET, NO_DATE_TWEET],
+    });
+
+    // --since 2026-06-01 → keep NEW_TWEET, BOUNDARY_TWEET, NO_DATE_TWEET; drop OLD_TWEET
+    const env = await runArchive(engine, {
+      target: 'bookmarks',
+      out,
+      since: '2026-06-01',
+    });
+
+    expect(env.ok).toBe(true);
+    if (!env.ok) return;
+
+    const { loadArchive } = await import('../src/archive.ts');
+    const file = loadArchive(out);
+    const ids = (file?.tweets ?? []).map((t) => t.id);
+
+    expect(ids).toContain('3000'); // NEW_TWEET kept
+    expect(ids).toContain('2000'); // BOUNDARY_TWEET kept (inclusive)
+    expect(ids).toContain('4000'); // NO_DATE_TWEET kept (fail-open)
+    expect(ids).not.toContain('1000'); // OLD_TWEET dropped
+
+    rmSync(dir, { recursive: true });
+  });
+
+  test('applies the filter for user target (proves filter is in the shared core)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'xrelay-arc-since-user-'));
+    const out = join(dir, 'archive.json');
+
+    const engine = fakeEngine({
+      userPosts: [NEW_TWEET, OLD_TWEET],
+    });
+
+    const env = await runArchive(engine, {
+      target: 'user',
+      handle: 'alice',
+      out,
+      since: '2026-06-01',
+    });
+
+    expect(env.ok).toBe(true);
+    if (!env.ok) return;
+
+    const { loadArchive } = await import('../src/archive.ts');
+    const file = loadArchive(out);
+    const ids = (file?.tweets ?? []).map((t) => t.id);
+
+    expect(ids).toContain('3000');
+    expect(ids).not.toContain('1000');
+
+    rmSync(dir, { recursive: true });
+  });
+
+  test('when --since is absent, all tweets are kept (no filter applied)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'xrelay-arc-since-none-'));
+    const out = join(dir, 'archive.json');
+
+    const engine = fakeEngine({
+      bookmarks: [NEW_TWEET, OLD_TWEET, NO_DATE_TWEET],
+    });
+
+    const env = await runArchive(engine, { target: 'bookmarks', out });
+
+    expect(env.ok).toBe(true);
+    if (!env.ok) return;
+    expect(env.data.total).toBe(3);
+
+    rmSync(dir, { recursive: true });
+  });
+});
+
+// ── whoami runner ─────────────────────────────────────────────────────────────
+
+describe('runWhoami', () => {
+  test('returns the authenticated user profile on success', async () => {
+    const profile: UserProfile = {
+      id: '99',
+      handle: 'testuser',
+      name: 'Test User',
+      verified: true,
+      followers: 1000,
+      following: 50,
+      tweets: 500,
+      url: 'https://x.com/testuser',
+    };
+    const engine = fakeEngine({ whoamiProfile: profile });
+
+    const env = await runWhoami(engine);
+
+    expect(env.ok).toBe(true);
+    if (!env.ok) return;
+    expect(env.data.handle).toBe('testuser');
+    expect(env.data.name).toBe('Test User');
+    expect(env.data.verified).toBe(true);
+  });
+
+  test('returns NOT_FOUND error envelope when whoami() returns null (not logged in)', async () => {
+    const engine = fakeEngine({ meHandle: null, whoamiProfile: null });
+
+    const env = await runWhoami(engine);
+
+    expect(env.ok).toBe(false);
+    if (env.ok) return;
+    expect(env.error.code).toBe('NOT_FOUND');
+    expect(env.error.message).toBe('not logged in');
   });
 });

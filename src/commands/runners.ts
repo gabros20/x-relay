@@ -17,6 +17,7 @@ import {
 import { type Engine, EngineError } from '../engine/index.ts';
 import type { SearchProduct } from '../engine/ops.ts';
 import { err, ok } from '../output.ts';
+import { parseTwitterDateMs } from '../time.ts';
 import type {
   ArchiveFile,
   ArchiveTweet,
@@ -71,6 +72,14 @@ export function runSearch(
 export function runUser(engine: Engine, handle: string): Promise<Envelope<UserProfile | null>> {
   if (!handle) return Promise.resolve(err('user', 'INVALID_INPUT', 'missing handle'));
   return guard('user', () => engine.user(handle));
+}
+
+export function runWhoami(engine: Engine): Promise<Envelope<UserProfile>> {
+  return guard('whoami', async () => {
+    const profile = await engine.whoami();
+    if (!profile) throw new EngineError('NOT_FOUND', 'not logged in');
+    return profile;
+  });
 }
 
 export interface UserPostsCommandOpts {
@@ -371,7 +380,23 @@ async function runArchiveCore(opts: ArchiveCommandOpts, spec: ArchiveSpec): Prom
   const existing = outPath ? loadArchive(outPath) : null;
   const knownIds = !opts.full && existing ? new Set(existing.tweets.map((t) => t.id)) : undefined;
 
-  const fresh = await spec.fetch(knownIds);
+  let fresh = await spec.fetch(knownIds);
+
+  // --since YYYY-MM-DD post-filter: drop tweets older than the cutoff date
+  // (start-of-day UTC, inclusive boundary). Applies uniformly to ALL targets
+  // so every target inherits it from this shared core.
+  // Tweets with an unparseable / absent createdAt are KEPT (fail-open).
+  if (opts.since) {
+    const cutoffMs = Date.parse(`${opts.since}T00:00:00Z`);
+    if (!Number.isNaN(cutoffMs)) {
+      fresh = fresh.filter((t) => {
+        const tweetMs = t.createdAt !== undefined ? parseTwitterDateMs(t.createdAt) : undefined;
+        // Keep when we cannot determine the date (fail-open).
+        if (tweetMs === undefined) return true;
+        return tweetMs >= cutoffMs;
+      });
+    }
+  }
 
   const generatedAt = new Date().toISOString();
   const { file, added } = mergeArchive(existing, fresh, {

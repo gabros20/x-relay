@@ -3,9 +3,41 @@
 process.env.TZ = 'UTC';
 
 import { describe, expect, test } from 'bun:test';
-import { formatIso8601, formatLocal } from '../src/time.ts';
+import { formatIso8601, formatLocal, parseTwitterDateMs } from '../src/time.ts';
 
 const VALID_CREATED_AT = 'Wed Jun 10 16:06:30 +0000 2026';
+
+describe('parseTwitterDateMs', () => {
+  test('returns epoch ms for a valid UTC Twitter date', () => {
+    // "Wed Jun 10 16:06:30 +0000 2026" → 2026-06-10T16:06:30Z
+    const ms = parseTwitterDateMs('Wed Jun 10 16:06:30 +0000 2026');
+    expect(ms).toBe(Date.UTC(2026, 5, 10, 16, 6, 30));
+  });
+
+  test('adjusts for a positive offset (converts to UTC)', () => {
+    // "Wed Jun 10 16:06:30 +0530 2026" is 10:36:30 UTC
+    const ms = parseTwitterDateMs('Wed Jun 10 16:06:30 +0530 2026');
+    expect(ms).toBe(Date.UTC(2026, 5, 10, 10, 36, 30));
+  });
+
+  test('adjusts for a negative offset (converts to UTC)', () => {
+    // "Wed Jun 10 16:06:30 -0800 2026" is 2026-06-11 00:06:30 UTC
+    const ms = parseTwitterDateMs('Wed Jun 10 16:06:30 -0800 2026');
+    expect(ms).toBe(Date.UTC(2026, 5, 11, 0, 6, 30));
+  });
+
+  test('returns undefined for unparseable non-empty input', () => {
+    expect(parseTwitterDateMs('not-a-date')).toBeUndefined();
+  });
+
+  test('returns undefined for empty string', () => {
+    expect(parseTwitterDateMs('')).toBeUndefined();
+  });
+
+  test('returns undefined for undefined input', () => {
+    expect(parseTwitterDateMs(undefined as unknown as string)).toBeUndefined();
+  });
+});
 
 describe('formatIso8601', () => {
   test('converts a valid Twitter created_at to ISO 8601', () => {

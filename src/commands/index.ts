@@ -20,6 +20,7 @@ export {
   runCommunity,
   runCommunityInfo,
   runArchive,
+  runWhoami,
   type SearchCommandOpts,
   type UserPostsCommandOpts,
   type CacheViewOpts,

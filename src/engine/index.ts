@@ -184,6 +184,11 @@ export interface Engine {
   archiveList(listId: string, opts?: ArchiveOpts): Promise<ArchiveTweet[]>;
   /** The authenticated user's own @handle (from the session), or null. Memoized. */
   me(): Promise<string | null>;
+  /**
+   * The authenticated user's full profile (handle + all UserProfile fields).
+   * Returns null if me() returns null (not logged in) or the profile lookup fails.
+   */
+  whoami(): Promise<UserProfile | null>;
 }
 
 export interface EngineDeps {
@@ -732,6 +737,12 @@ export function createEngine(deps: EngineDeps): Engine {
         opts ?? {},
         sleep,
       );
+    },
+
+    async whoami() {
+      const handle = await me();
+      if (!handle) return null;
+      return getUser(handle);
     },
   };
 

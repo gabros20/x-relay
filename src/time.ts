@@ -75,6 +75,25 @@ function pad2(n: number): string {
 }
 
 /**
+ * Parse a Twitter created_at string and return epoch milliseconds (UTC).
+ * Example: "Wed Jun 10 16:06:30 +0000 2026" → 1749571590000
+ *
+ * On unparseable non-empty input, returns undefined.
+ * On empty / undefined input, returns undefined.
+ */
+export function parseTwitterDateMs(createdAt: string): number | undefined {
+  if (!createdAt) return undefined;
+
+  const parsed = parseTwitterDate(createdAt);
+  if (!parsed) return undefined;
+
+  const { year, month, day, hour, minute, second, offsetMinutes } = parsed;
+
+  // Convert to UTC: subtract the local offset so the result is always UTC ms.
+  return Date.UTC(year, month, day, hour, minute, second) - offsetMinutes * 60_000;
+}
+
+/**
  * Parse a Twitter created_at string and return an ISO 8601 string.
  * Example: "Wed Jun 10 16:06:30 +0000 2026" → "2026-06-10T16:06:30+00:00"
  *
