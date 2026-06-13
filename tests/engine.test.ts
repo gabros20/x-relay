@@ -1570,7 +1570,8 @@ describe('engine.post (CreateTweet)', () => {
 
     expect(result.id).toBe('777888999');
     const vars = log[0]?.body.variables as Record<string, unknown>;
-    expect(vars.attachment_url).toBe('https://x.com/i/web/status/55544433');
+    // twitter-cli parity (client.py:696): /i/status/<id>, no /web segment.
+    expect(vars.attachment_url).toBe('https://x.com/i/status/55544433');
     expect(vars.reply).toBeUndefined();
   });
 

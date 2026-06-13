@@ -793,7 +793,8 @@ export function createEngine(deps: EngineDeps): Engine {
         exclude_reply_user_ids: [],
       };
     } else if (opts?.quoteTweetId) {
-      variables.attachment_url = `https://x.com/i/web/status/${opts.quoteTweetId}`;
+      // Match twitter-cli exactly (client.py:696): /i/status/<id>, NOT /i/web/status/<id>.
+      variables.attachment_url = `https://x.com/i/status/${opts.quoteTweetId}`;
     }
     const data = await mutate('CreateTweet', variables, { withFeatures: true });
     // X returns { create_tweet: { tweet_results: { result: { rest_id: '<id>' } } } }
