@@ -111,11 +111,37 @@ const num = (p: ParsedArgs, name: string): number | undefined => {
 const PRODUCTS = new Set<SearchProduct>(['Top', 'Latest', 'Media', 'People']);
 const SORTS = new Set<CacheSort>(['relevance', 'newest', 'oldest', 'likes', 'views', 'bookmarks']);
 
+/** Advanced search flags shared by `search` command and `archive search` target. */
+function parseSearchFlags(
+  parsed: ParsedArgs,
+): Partial<import('./commands/query.ts').SearchQueryFlags> & { product?: SearchProduct } {
+  const product = first(parsed, 'product');
+  const minFaves = num(parsed, 'min-faves');
+  const minRetweets = num(parsed, 'min-retweets');
+  return {
+    ...(product && PRODUCTS.has(product as SearchProduct)
+      ? { product: product as SearchProduct }
+      : {}),
+    ...(first(parsed, 'from') ? { from: first(parsed, 'from') } : {}),
+    ...(first(parsed, 'to') ? { to: first(parsed, 'to') } : {}),
+    ...(first(parsed, 'since') ? { since: first(parsed, 'since') } : {}),
+    ...(first(parsed, 'until') ? { until: first(parsed, 'until') } : {}),
+    ...(first(parsed, 'lang') ? { lang: first(parsed, 'lang') } : {}),
+    ...(minFaves !== undefined ? { minFaves } : {}),
+    ...(minRetweets !== undefined ? { minRetweets } : {}),
+    ...(parsed.flags.filter ? { filter: parsed.flags.filter } : {}),
+  };
+}
+
 function buildArchiveOpts(parsed: ParsedArgs): ArchiveCommandOpts {
   const target = parsed.positionals[0] ?? '';
   // For `archive user <handle>`, positionals[1] is the handle.
   const rawHandle = target === 'user' ? (parsed.positionals[1] ?? '') : '';
   const archiveHandle = rawHandle ? (extractHandle(rawHandle) ?? rawHandle) : undefined;
+  // For `archive search "<query>"`, positionals[1] is the query string.
+  const searchQuery = target === 'search' ? (parsed.positionals[1] ?? '') : undefined;
+  // For `archive list <id>`, positionals[1] is the list id.
+  const listId = target === 'list' ? (parsed.positionals[1] ?? '') : undefined;
   const limit = num(parsed, 'limit');
   return {
     target,
@@ -126,6 +152,11 @@ function buildArchiveOpts(parsed: ParsedArgs): ArchiveCommandOpts {
     ...(parsed.bools.has('stdout') ? { stdout: true } : {}),
     ...(archiveHandle ? { handle: archiveHandle } : {}),
     ...(parsed.bools.has('replies') ? { replies: true } : {}),
+    // search-target fields (query + advanced search flags)
+    ...(searchQuery !== undefined ? { query: searchQuery } : {}),
+    ...parseSearchFlags(parsed),
+    // list-target field
+    ...(listId !== undefined ? { listId } : {}),
   };
 }
 

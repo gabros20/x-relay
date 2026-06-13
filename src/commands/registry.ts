@@ -137,7 +137,11 @@ export const COMMANDS: CommandDef[] = [
     usage:
       'xrelay archive bookmarks [--out <file.json>] [--limit N] [--full] [--prune] [--stdout]\n' +
       '       xrelay archive user <handle> [--replies] [--out <file.json>] [--limit N] [--full] [--prune] [--stdout]\n' +
-      '       xrelay archive my-posts [--replies] [--out <file.json>] [--limit N] [--full] [--prune] [--stdout]',
+      '       xrelay archive my-posts [--replies] [--out <file.json>] [--limit N] [--full] [--prune] [--stdout]\n' +
+      '       xrelay archive search "<query>" [--product Top|Latest|Media|People] [--from <h>] [--since YYYY-MM-DD]\n' +
+      '              [--until YYYY-MM-DD] [--lang xx] [--min-faves N] [--min-retweets N] [--filter <v> ...]\n' +
+      '              [--out <file.json>] [--limit N] [--stdout]\n' +
+      '       xrelay archive list <list-id> [--out <file.json>] [--limit N] [--full] [--prune] [--stdout]',
   },
 ];
 

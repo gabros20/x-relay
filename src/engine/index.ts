@@ -162,6 +162,26 @@ export interface Engine {
    * Delegates to archiveUserPosts internally.
    */
   archiveMyPosts(opts?: ArchiveOpts & { replies?: boolean }): Promise<ArchiveTweet[]>;
+  /**
+   * Fetch search results at full fidelity and return them as ArchiveTweet[].
+   * Accepts an optional `product` (default: 'Top') to control result ranking.
+   *
+   * NOTE: Search results are NOT id-monotonic — X reorders them run-to-run.
+   * Membership-stop is therefore unreliable for search and is intentionally
+   * disabled: `knownIds` is always ignored and the full page-to-limit sweep
+   * is performed regardless. Pass `limit` to cap how many tweets are collected.
+   */
+  archiveSearch(
+    query: string,
+    opts?: ArchiveOpts & { product?: SearchProduct },
+  ): Promise<ArchiveTweet[]>;
+  /**
+   * Fetch a Twitter List timeline at full fidelity and return them as ArchiveTweet[].
+   * List timelines ARE id-ordered (newest-first), so the normal incremental
+   * membership-stop applies: provide `knownIds` for incremental runs, or pass
+   * `full: true` to page through everything up to `limit`.
+   */
+  archiveList(listId: string, opts?: ArchiveOpts): Promise<ArchiveTweet[]>;
   /** The authenticated user's own @handle (from the session), or null. Memoized. */
   me(): Promise<string | null>;
 }
@@ -684,6 +704,34 @@ export function createEngine(deps: EngineDeps): Engine {
       if (!handle)
         throw new EngineError('INVALID_INPUT', 'could not determine your handle — pass --handle');
       return archiveUserPostsImpl(handle, opts);
+    },
+
+    archiveSearch(query, opts) {
+      const product: SearchProduct = opts?.product ?? 'Top';
+      // Search results reorder run-to-run and are not id-monotonic, so
+      // membership-stop is unreliable. Always perform a full page-to-limit
+      // sweep by passing opts without knownIds.
+      return archiveTimeline(
+        async (cursor) => {
+          const value = await call('SearchTimeline', searchRequest({ query, product, cursor }));
+          return parseTimeline(value, { rich: true });
+        },
+        { limit: opts?.limit, full: true },
+        sleep,
+      );
+    },
+
+    archiveList(listId, opts) {
+      // List timelines are id-ordered so the normal incremental membership-stop
+      // applies (same as bookmarks / user posts).
+      return archiveTimeline(
+        async (cursor) => {
+          const value = await call('ListLatestTweetsTimeline', listRequest({ listId, cursor }));
+          return parseTimeline(value, { rich: true });
+        },
+        opts ?? {},
+        sleep,
+      );
     },
   };
 

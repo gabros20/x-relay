@@ -299,7 +299,7 @@ function viewCache(source: CacheSource, opts: CacheViewOpts, added?: number): Ca
 
 // ── archive ──────────────────────────────────────────────────────────────────
 
-export interface ArchiveCommandOpts {
+export interface ArchiveCommandOpts extends Partial<SearchQueryFlags> {
   /** The archive sub-target: bookmarks | user | my-posts | list | search | likes | feed. */
   target: string;
   /** Output file path. Required unless --stdout. */
@@ -316,6 +316,12 @@ export interface ArchiveCommandOpts {
   handle?: string;
   /** For user / my-posts targets: include replies in the sweep. */
   replies?: boolean;
+  /** For search target: the raw search query (built by buildSearchQuery from flags). */
+  query?: string;
+  /** For search target: the search product / tab (default: 'Top'). */
+  product?: SearchProduct;
+  /** For list target: the Twitter List id to archive. */
+  listId?: string;
 }
 
 export interface ArchiveResult {
@@ -474,9 +480,41 @@ export function runArchive(
     case 'my-posts':
       return guard('archive', () => runArchiveMyPosts(engine, opts));
 
-    // Future targets (T2–T6) — each will replace this arm with a real handler.
-    case 'list':
-    case 'search':
+    case 'search': {
+      const rawQuery = buildSearchQuery({ query: opts.query ?? '', ...opts });
+      if (!rawQuery)
+        return Promise.resolve(err('archive', 'INVALID_INPUT', 'archive search requires a query'));
+      return guard('archive', () =>
+        runArchiveCore(opts, {
+          source: 'search',
+          patchFile: (file) => {
+            file.query = rawQuery;
+          },
+          fetch: (knownIds) =>
+            engine.archiveSearch(rawQuery, {
+              ...archiveFetchOpts(opts, knownIds),
+              ...(opts.product ? { product: opts.product } : {}),
+            }),
+        }),
+      );
+    }
+
+    case 'list': {
+      const listId = opts.listId;
+      if (!listId)
+        return Promise.resolve(err('archive', 'INVALID_INPUT', 'archive list requires a list id'));
+      return guard('archive', () =>
+        runArchiveCore(opts, {
+          source: 'list',
+          patchFile: (file) => {
+            file.listId = listId;
+          },
+          fetch: (knownIds) => engine.archiveList(listId, archiveFetchOpts(opts, knownIds)),
+        }),
+      );
+    }
+
+    // Future targets (T4–T6).
     case 'likes':
     case 'feed':
       return Promise.resolve(

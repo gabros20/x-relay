@@ -48,6 +48,8 @@ interface FakeEngineOpts {
   bookmarks?: ArchiveTweet[];
   userPosts?: ArchiveTweet[];
   myPosts?: ArchiveTweet[];
+  searchTweets?: ArchiveTweet[];
+  listTweets?: ArchiveTweet[];
   /** Override me() return value (default: 'me'). */
   meHandle?: string | null;
   /** When set, archiveUserPosts throws this EngineError code. */
@@ -122,6 +124,12 @@ function fakeEngine(archiveTweetsOrOpts: ArchiveTweet[] | FakeEngineOpts): Engin
     },
     async archiveMyPosts(): Promise<ArchiveTweet[]> {
       return opts.myPosts ?? [];
+    },
+    async archiveSearch(): Promise<ArchiveTweet[]> {
+      return opts.searchTweets ?? [];
+    },
+    async archiveList(): Promise<ArchiveTweet[]> {
+      return opts.listTweets ?? [];
     },
     async me(): Promise<string | null> {
       return opts.meHandle !== undefined ? opts.meHandle : 'me';
@@ -424,6 +432,147 @@ describe('runArchive — my-posts target', () => {
   test('missing --out and --stdout returns INVALID_INPUT (guard fires first)', async () => {
     const engine = fakeEngine({});
     const env = await runArchive(engine, { target: 'my-posts' });
+    expect(env.ok).toBe(false);
+    if (env.ok) return;
+    expect(env.error.code).toBe('INVALID_INPUT');
+  });
+});
+
+// ── archive search target ─────────────────────────────────────────────────────
+
+describe('runArchive — search target', () => {
+  test('saves archive with source=search and query set', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'xrelay-arc-'));
+    const out = join(dir, 'archive.json');
+    const tweets = [makeArchiveTweet('300'), makeArchiveTweet('200')];
+    const engine = fakeEngine({ searchTweets: tweets });
+
+    const env = await runArchive(engine, { target: 'search', query: 'AI agents', out });
+
+    expect(env.ok).toBe(true);
+    if (!env.ok) return;
+    expect(env.data.source).toBe('search');
+    expect(env.data.added).toBe(2);
+    expect(env.data.total).toBe(2);
+
+    // Verify the file on disk has source=search and query stamped
+    const { loadArchive } = await import('../src/archive.ts');
+    const file = loadArchive(out);
+    expect(file?.source).toBe('search');
+    expect(file?.query).toBe('AI agents');
+
+    rmSync(dir, { recursive: true });
+  });
+
+  test('--stdout prints JSON with source=search', async () => {
+    const tweets = [makeArchiveTweet('500')];
+    const engine = fakeEngine({ searchTweets: tweets });
+
+    const chunks: string[] = [];
+    const origWrite = process.stdout.write.bind(process.stdout);
+    // @ts-ignore override for test
+    process.stdout.write = (chunk: string) => {
+      chunks.push(chunk);
+      return true;
+    };
+
+    const env = await runArchive(engine, { target: 'search', query: 'AI', stdout: true });
+
+    // @ts-ignore restore
+    process.stdout.write = origWrite;
+
+    expect(env.ok).toBe(true);
+    if (!env.ok) return;
+    expect(env.data.out).toBeUndefined();
+    const json = JSON.parse(chunks.join(''));
+    expect(json.source).toBe('search');
+    expect(json.query).toBe('AI');
+  });
+
+  test('missing --out and --stdout returns INVALID_INPUT', async () => {
+    const engine = fakeEngine({});
+    const env = await runArchive(engine, { target: 'search', query: 'AI' });
+    expect(env.ok).toBe(false);
+    if (env.ok) return;
+    expect(env.error.code).toBe('INVALID_INPUT');
+  });
+});
+
+// ── archive list target ───────────────────────────────────────────────────────
+
+describe('runArchive — list target', () => {
+  test('saves archive with source=list and listId set', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'xrelay-arc-'));
+    const out = join(dir, 'archive.json');
+    const tweets = [makeArchiveTweet('400'), makeArchiveTweet('300')];
+    const engine = fakeEngine({ listTweets: tweets });
+
+    const env = await runArchive(engine, { target: 'list', listId: 'mylist123', out });
+
+    expect(env.ok).toBe(true);
+    if (!env.ok) return;
+    expect(env.data.source).toBe('list');
+    expect(env.data.added).toBe(2);
+    expect(env.data.total).toBe(2);
+
+    // Verify the file on disk has source=list and listId stamped
+    const { loadArchive } = await import('../src/archive.ts');
+    const file = loadArchive(out);
+    expect(file?.source).toBe('list');
+    expect(file?.listId).toBe('mylist123');
+
+    rmSync(dir, { recursive: true });
+  });
+
+  test('incremental run merges correctly (list IS id-ordered)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'xrelay-arc-'));
+    const out = join(dir, 'archive.json');
+
+    const { mergeArchive, saveArchive: save } = await import('../src/archive.ts');
+    const seed = mergeArchive(null, [makeArchiveTweet('200'), makeArchiveTweet('100')], {
+      generatedAt: '2026-01-01T00:00:00+00:00',
+    });
+    seed.file.source = 'list';
+    seed.file.listId = 'mylist123';
+    save(out, seed.file);
+
+    const engine = fakeEngine({ listTweets: [makeArchiveTweet('300'), makeArchiveTweet('200')] });
+    const env = await runArchive(engine, { target: 'list', listId: 'mylist123', out });
+
+    expect(env.ok).toBe(true);
+    if (!env.ok) return;
+    expect(env.data.added).toBe(1); // only 300 is new
+    expect(env.data.total).toBe(3); // 300 + 200 + 100
+
+    rmSync(dir, { recursive: true });
+  });
+
+  test('--stdout prints JSON with source=list', async () => {
+    const engine = fakeEngine({ listTweets: [makeArchiveTweet('500')] });
+
+    const chunks: string[] = [];
+    const origWrite = process.stdout.write.bind(process.stdout);
+    // @ts-ignore override for test
+    process.stdout.write = (chunk: string) => {
+      chunks.push(chunk);
+      return true;
+    };
+
+    const env = await runArchive(engine, { target: 'list', listId: 'mylist123', stdout: true });
+
+    // @ts-ignore restore
+    process.stdout.write = origWrite;
+
+    expect(env.ok).toBe(true);
+    if (!env.ok) return;
+    const json = JSON.parse(chunks.join(''));
+    expect(json.source).toBe('list');
+    expect(json.listId).toBe('mylist123');
+  });
+
+  test('missing --out and --stdout returns INVALID_INPUT', async () => {
+    const engine = fakeEngine({});
+    const env = await runArchive(engine, { target: 'list', listId: 'mylist123' });
     expect(env.ok).toBe(false);
     if (env.ok) return;
     expect(env.error.code).toBe('INVALID_INPUT');

@@ -592,6 +592,239 @@ describe('archiveMyPosts', () => {
   });
 });
 
+// ── archiveSearch / archiveList fixtures ─────────────────────────────────────
+
+/**
+ * A rich search timeline page for archiveSearch tests.
+ * Reuses the search_by_raw_query envelope that parseTimeline finds.
+ */
+function richSearchPage(ids: string[], cursor?: string): unknown {
+  const entries: unknown[] = ids.map((id) => ({
+    entryId: `tweet-${id}`,
+    content: {
+      itemContent: {
+        tweet_results: {
+          result: {
+            __typename: 'Tweet',
+            rest_id: id,
+            core: {
+              user_results: {
+                result: {
+                  __typename: 'User',
+                  rest_id: `u${id}`,
+                  core: { screen_name: 'carol', name: 'Carol' },
+                  legacy: {
+                    profile_image_url_https: `https://pbs.twimg.com/profile_images/${id}/photo.jpg`,
+                  },
+                },
+              },
+            },
+            legacy: {
+              full_text: `search tweet ${id}`,
+              favorite_count: 7,
+              created_at: 'Wed Jun 10 16:06:30 +0000 2026',
+              extended_entities: {
+                media: [
+                  {
+                    type: 'photo',
+                    media_url_https: `https://pbs.twimg.com/media/${id}.jpg`,
+                    original_info: { width: 1024, height: 768 },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      },
+    },
+  }));
+  if (cursor !== undefined) {
+    entries.push({
+      entryId: `cursor-bottom-${cursor}`,
+      content: { cursorType: 'Bottom', value: cursor },
+    });
+  }
+  return {
+    data: {
+      search_by_raw_query: {
+        search_timeline: { timeline: { instructions: [{ type: 'TimelineAddEntries', entries }] } },
+      },
+    },
+  };
+}
+
+/**
+ * A rich list timeline page for archiveList tests.
+ * Uses the list_latest_tweets_timeline envelope that parseTimeline finds.
+ */
+function richListPage(ids: string[], cursor?: string): unknown {
+  const entries: unknown[] = ids.map((id) => ({
+    entryId: `tweet-${id}`,
+    content: {
+      itemContent: {
+        tweet_results: {
+          result: {
+            __typename: 'Tweet',
+            rest_id: id,
+            core: {
+              user_results: {
+                result: {
+                  __typename: 'User',
+                  rest_id: `u${id}`,
+                  core: { screen_name: 'dave', name: 'Dave' },
+                  legacy: {
+                    profile_image_url_https: `https://pbs.twimg.com/profile_images/${id}/photo.jpg`,
+                  },
+                },
+              },
+            },
+            legacy: {
+              full_text: `list tweet ${id}`,
+              favorite_count: 4,
+              created_at: 'Wed Jun 10 16:06:30 +0000 2026',
+              extended_entities: {
+                media: [
+                  {
+                    type: 'photo',
+                    media_url_https: `https://pbs.twimg.com/media/${id}.jpg`,
+                    original_info: { width: 800, height: 600 },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      },
+    },
+  }));
+  if (cursor !== undefined) {
+    entries.push({
+      entryId: `cursor-bottom-${cursor}`,
+      content: { cursorType: 'Bottom', value: cursor },
+    });
+  }
+  return {
+    data: {
+      list: {
+        tweets_timeline: {
+          timeline: { instructions: [{ type: 'TimelineAddEntries', entries }] },
+        },
+      },
+    },
+  };
+}
+
+describe('archiveSearch', () => {
+  test('returns rich ArchiveTweet[] with media and createdAtISO', async () => {
+    const client = fakeClient({ _start: richSearchPage(['501', '502']) });
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    const results: ArchiveTweet[] = await engine.archiveSearch('AI agents');
+    expect(results).toHaveLength(2);
+    expect(results[0]?.id).toBe('501');
+    expect(results[0]?.text).toBe('search tweet 501');
+    expect(results[0]?.media?.[0]?.url).toMatch(/501\.jpg/);
+    expect(results[0]?.createdAtISO).toBe('2026-06-10T16:06:30+00:00');
+  });
+
+  test('uses the SearchTimeline op with the query', async () => {
+    const log = { ops: [] as string[] };
+    const client = fakeClient({ _start: richSearchPage(['1']) }, log);
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    await engine.archiveSearch('AI agents');
+    expect(log.ops).toContain('SearchTimeline');
+  });
+
+  test('respects limit option', async () => {
+    const client = fakeClient({
+      _start: richSearchPage(['10', '9', '8', '7', '6'], 'c1'),
+      c1: richSearchPage(['5', '4', '3']),
+    });
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    const results = await engine.archiveSearch('AI', { limit: 3 });
+    expect(results).toHaveLength(3);
+    expect(results.map((t) => t.id)).toEqual(['10', '9', '8']);
+  });
+
+  test('does NOT do membership-stop even when knownIds provided (search reorders)', async () => {
+    // All page-1 ids are "known" — a regular membership-stop would halt immediately.
+    // archiveSearch must ignore knownIds and collect everything.
+    const client = fakeClient({
+      _start: richSearchPage(['7', '8', '9'], 'c1'),
+      c1: richSearchPage(['10', '11', '12']),
+    });
+    const knownIds = new Set(['7', '8', '9']);
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    const results = await engine.archiveSearch('AI', { knownIds });
+    // All 6 tweets collected — membership stop was NOT applied
+    expect(results.map((t) => t.id)).toEqual(['7', '8', '9', '10', '11', '12']);
+  });
+
+  test('accepts product option', async () => {
+    const log = { ops: [] as string[] };
+    const client = fakeClient({ _start: richSearchPage(['1']) }, log);
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    const results = await engine.archiveSearch('AI', { product: 'Latest' });
+    expect(results).toHaveLength(1);
+    expect(log.ops).toContain('SearchTimeline');
+  });
+});
+
+describe('archiveList', () => {
+  test('returns rich ArchiveTweet[] with media and createdAtISO', async () => {
+    const client = fakeClient({ _start: richListPage(['601', '602']) });
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    const results: ArchiveTweet[] = await engine.archiveList('mylist123');
+    expect(results).toHaveLength(2);
+    expect(results[0]?.id).toBe('601');
+    expect(results[0]?.text).toBe('list tweet 601');
+    expect(results[0]?.media?.[0]?.url).toMatch(/601\.jpg/);
+    expect(results[0]?.createdAtISO).toBe('2026-06-10T16:06:30+00:00');
+  });
+
+  test('uses the ListLatestTweetsTimeline op', async () => {
+    const log = { ops: [] as string[] };
+    const client = fakeClient({ _start: richListPage(['1']) }, log);
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    await engine.archiveList('mylist123');
+    expect(log.ops).toContain('ListLatestTweetsTimeline');
+  });
+
+  test('supports incremental membership-stop (list IS id-ordered)', async () => {
+    const client = fakeClient({
+      _start: richListPage(['10', '9', '8'], 'c1'),
+      c1: richListPage(['7', '6', '5'], 'c2'),
+      c2: richListPage(['4', '3', '2'], 'c3'),
+    });
+    const knownIds = new Set(['7', '6', '5', '4', '3', '2', '1']);
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    const results = await engine.archiveList('mylist123', { knownIds });
+    // page 1 (10, 9, 8) all fresh — collected; page 2 (7, 6, 5) all known → tolerance=3 triggers
+    expect(results.map((t) => t.id)).toEqual(['10', '9', '8']);
+  });
+
+  test('full mode bypasses membership-stop', async () => {
+    const client = fakeClient({
+      _start: richListPage(['10', '9', '8'], 'c1'),
+      c1: richListPage(['7', '6', '5']),
+    });
+    const knownIds = new Set(['10', '9', '8', '7', '6', '5']);
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    const results = await engine.archiveList('mylist123', { knownIds, full: true });
+    expect(results.map((t) => t.id)).toEqual(['10', '9', '8', '7', '6', '5']);
+  });
+
+  test('respects limit option', async () => {
+    const client = fakeClient({
+      _start: richListPage(['10', '9', '8', '7', '6'], 'c1'),
+      c1: richListPage(['5', '4', '3']),
+    });
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    const results = await engine.archiveList('mylist123', { limit: 3 });
+    expect(results).toHaveLength(3);
+    expect(results.map((t) => t.id)).toEqual(['10', '9', '8']);
+  });
+});
+
 describe('archiveBookmarks', () => {
   test('returns rich ArchiveTweet[] with media url and createdAtISO set', async () => {
     const client = fakeClient({ _start: richBookmarkPage(['100', '200']) });
