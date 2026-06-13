@@ -13,6 +13,7 @@ import {
   runBookmarks,
   runCommunity,
   runCommunityInfo,
+  runFeed,
   runFollowers,
   runFollowing,
   runLikers,
@@ -55,8 +56,18 @@ const VALUE_FLAGS = new Set([
   'max',
   'woeid',
   'out',
+  'type',
 ]);
-const BOOL_FLAGS = new Set(['replies', 'sync', 'live', 'repair', 'full', 'prune', 'stdout']);
+const BOOL_FLAGS = new Set([
+  'replies',
+  'sync',
+  'live',
+  'repair',
+  'full',
+  'prune',
+  'stdout',
+  'following',
+]);
 /** Single-dash aliases. */
 const SHORT_FLAGS: Record<string, string> = { q: 'query' };
 
@@ -146,6 +157,10 @@ function buildArchiveOpts(parsed: ParsedArgs): ArchiveCommandOpts {
   // For `archive list <id>`, positionals[1] is the list id.
   const listId = target === 'list' ? (parsed.positionals[1] ?? '') : undefined;
   const limit = num(parsed, 'limit');
+  // For `archive feed`, --following or --type following → chronological timeline.
+  const typeFlag = first(parsed, 'type');
+  const following =
+    target === 'feed' && (parsed.bools.has('following') || typeFlag === 'following');
   return {
     target,
     ...(first(parsed, 'out') ? { out: first(parsed, 'out') } : {}),
@@ -160,6 +175,8 @@ function buildArchiveOpts(parsed: ParsedArgs): ArchiveCommandOpts {
     ...parseSearchFlags(parsed),
     // list-target field
     ...(listId !== undefined ? { listId } : {}),
+    // feed-target field
+    ...(following ? { following: true } : {}),
   };
 }
 
@@ -283,6 +300,15 @@ export async function dispatch(parsed: ParsedArgs, engine: Engine): Promise<Enve
         ...buildCacheOpts(parsed),
         ...(first(parsed, 'handle') ? { handle: first(parsed, 'handle') } : {}),
       });
+    case 'feed': {
+      // --following or --type following → chronological; --type for-you → algorithmic (default)
+      const typeFlag = first(parsed, 'type');
+      const following = parsed.bools.has('following') || typeFlag === 'following';
+      return runFeed(engine, {
+        ...(following ? { following: true } : {}),
+        ...(num(parsed, 'limit') !== undefined ? { limit: num(parsed, 'limit') } : {}),
+      });
+    }
     case 'sync': {
       const source = target === 'posts' || target === 'all' ? target : 'bookmarks';
       return runSync(engine, {

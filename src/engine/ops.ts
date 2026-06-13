@@ -42,6 +42,8 @@ export const OPS = {
     operationName: 'CommunityTweetsTimeline',
   },
   Likes: { queryId: 'dv5-II7_Bup_PHish7p6fw', operationName: 'Likes' },
+  HomeTimeline: { queryId: 'HCosKfLNW1AcOo3la3mMgg', operationName: 'HomeTimeline' },
+  HomeLatestTimeline: { queryId: 'U0cdisy7QFIoTfu3-Okw0A', operationName: 'HomeLatestTimeline' },
 } as const satisfies Record<string, { queryId: string; operationName: string }>;
 
 export type OpName = keyof typeof OPS;
@@ -422,6 +424,35 @@ export function communityTweetsRequest(params: CommunityTweetsParams): BuiltRequ
     cursor,
   );
   return {
+    variables: { ...variables, ...kv },
+    features: { ...FEATURES, ...ft },
+  };
+}
+
+// --- HomeTimeline / HomeLatestTimeline --------------------------------------
+
+export interface HomeTimelineParams extends Overrides {
+  count?: number;
+  cursor?: string;
+  /** When true, targets HomeLatestTimeline (chronological following feed); otherwise HomeTimeline (algorithmic for-you). */
+  latest?: boolean;
+}
+
+export function homeTimelineRequest(params: HomeTimelineParams): OpRequest {
+  const { count = 20, cursor, latest = false, kv, ft } = params;
+  const op: OpName = latest ? 'HomeLatestTimeline' : 'HomeTimeline';
+  const variables = withCursor(
+    {
+      count,
+      includePromotedContent: false,
+      latestControlAvailable: true,
+      requestContext: 'launch',
+      withCommunity: true,
+    },
+    cursor,
+  );
+  return {
+    op,
     variables: { ...variables, ...kv },
     features: { ...FEATURES, ...ft },
   };

@@ -163,6 +163,15 @@ export function runTrends(engine: Engine, opts: { woeid?: number; limit?: number
   );
 }
 
+export function runFeed(engine: Engine, opts: { following?: boolean; limit?: number }) {
+  return guard('feed', () =>
+    engine.feed({
+      ...(opts.following ? { following: true } : {}),
+      ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
+    }),
+  );
+}
+
 export function runCommunity(engine: Engine, communityId: string, limit?: number) {
   if (!communityId)
     return Promise.resolve(err('community', 'INVALID_INPUT', 'missing community id'));
@@ -340,6 +349,8 @@ export interface ArchiveCommandOpts extends Partial<SearchQueryFlags> {
   product?: SearchProduct;
   /** For list target: the Twitter List id to archive. */
   listId?: string;
+  /** For feed target: when true, fetch the following (chronological) timeline. */
+  following?: boolean;
 }
 
 export interface ArchiveResult {
@@ -565,10 +576,19 @@ export function runArchive(
     case 'likes':
       return guard('archive', () => runArchiveLikes(engine, opts));
 
-    // Future targets (T5–T6).
     case 'feed':
-      return Promise.resolve(
-        err('archive', 'INVALID_INPUT', `archive target '${opts.target}' is not yet implemented`),
+      return guard('archive', () =>
+        runArchiveCore(opts, {
+          source: 'feed',
+          fetch: (_knownIds) =>
+            engine.archiveFeed({
+              // Feed is not id-monotonic; membership-stop is intentionally disabled
+              // (same as archiveSearch). knownIds is ignored — always full sweep.
+              ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
+              ...(opts.following ? { following: true } : {}),
+              full: true,
+            }),
+        }),
       );
 
     default:

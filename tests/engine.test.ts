@@ -1015,6 +1015,169 @@ describe('archiveLikes', () => {
   });
 });
 
+// ── feed / archiveFeed fixtures ───────────────────────────────────────────────
+
+/**
+ * A synthetic home timeline page. Uses the search_by_raw_query envelope shape
+ * (parseTimeline finds instructions anywhere in the value via findDict), so the
+ * same richSearchPage factory works for feed pages — both point at the same
+ * TimelineAddEntries instruction structure.
+ */
+function richFeedPage(ids: string[], cursor?: string): unknown {
+  const entries: unknown[] = ids.map((id) => ({
+    entryId: `tweet-${id}`,
+    content: {
+      itemContent: {
+        tweet_results: {
+          result: {
+            __typename: 'Tweet',
+            rest_id: id,
+            core: {
+              user_results: {
+                result: {
+                  __typename: 'User',
+                  rest_id: `u${id}`,
+                  core: { screen_name: 'eve', name: 'Eve' },
+                  legacy: {
+                    profile_image_url_https: `https://pbs.twimg.com/profile_images/${id}/photo.jpg`,
+                  },
+                },
+              },
+            },
+            legacy: {
+              full_text: `feed tweet ${id}`,
+              favorite_count: 2,
+              created_at: 'Wed Jun 10 16:06:30 +0000 2026',
+              extended_entities: {
+                media: [
+                  {
+                    type: 'photo',
+                    media_url_https: `https://pbs.twimg.com/media/${id}.jpg`,
+                    original_info: { width: 1024, height: 768 },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      },
+    },
+  }));
+  if (cursor !== undefined) {
+    entries.push({
+      entryId: `cursor-bottom-${cursor}`,
+      content: { cursorType: 'Bottom', value: cursor },
+    });
+  }
+  return {
+    data: {
+      home: {
+        home_timeline_urt: {
+          instructions: [{ type: 'TimelineAddEntries', entries }],
+        },
+      },
+    },
+  };
+}
+
+describe('feed (research)', () => {
+  test('returns a slim TweetPage from the for-you timeline (HomeTimeline op)', async () => {
+    const loggedOps: string[] = [];
+    const baseClient = fakeClient({ _start: richFeedPage(['801', '802'], 'c1') });
+    const client: EngineClient = {
+      get: async (op, req) => {
+        loggedOps.push(op);
+        return baseClient.get(op, req);
+      },
+    };
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    const page = await engine.feed({ limit: 2 });
+    expect(page.tweets.map((t) => t.id)).toEqual(['801', '802']);
+    expect(page.nextCursor).toBe('c1');
+    expect(loggedOps).toContain('HomeTimeline');
+    expect(loggedOps).not.toContain('HomeLatestTimeline');
+  });
+
+  test('following:true selects the HomeLatestTimeline op', async () => {
+    const loggedOps: string[] = [];
+    const baseClient = fakeClient({ _start: richFeedPage(['901']) });
+    const client: EngineClient = {
+      get: async (op, req) => {
+        loggedOps.push(op);
+        return baseClient.get(op, req);
+      },
+    };
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    const page = await engine.feed({ following: true, limit: 1 });
+    expect(page.tweets.map((t) => t.id)).toEqual(['901']);
+    expect(loggedOps).toContain('HomeLatestTimeline');
+    expect(loggedOps).not.toContain('HomeTimeline');
+  });
+
+  test('follows cursors until limit', async () => {
+    const client = fakeClient({
+      _start: richFeedPage(['10', '9'], 'c1'),
+      c1: richFeedPage(['8', '7'], 'c2'),
+    });
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    const page = await engine.feed({ limit: 3 });
+    expect(page.tweets.map((t) => t.id)).toEqual(['10', '9', '8']);
+  });
+});
+
+describe('archiveFeed', () => {
+  test('returns rich ArchiveTweet[] with media and createdAtISO', async () => {
+    const client = fakeClient({ _start: richFeedPage(['901', '902']) });
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    const results: ArchiveTweet[] = await engine.archiveFeed();
+    expect(results).toHaveLength(2);
+    expect(results[0]?.id).toBe('901');
+    expect(results[0]?.text).toBe('feed tweet 901');
+    expect(results[0]?.media?.[0]?.url).toMatch(/901\.jpg/);
+    expect(results[0]?.createdAtISO).toBe('2026-06-10T16:06:30+00:00');
+  });
+
+  test('following:true uses HomeLatestTimeline op', async () => {
+    const loggedOps: string[] = [];
+    const baseClient = fakeClient({ _start: richFeedPage(['1']) });
+    const client: EngineClient = {
+      get: async (op, req) => {
+        loggedOps.push(op);
+        return baseClient.get(op, req);
+      },
+    };
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    await engine.archiveFeed({ following: true });
+    expect(loggedOps).toContain('HomeLatestTimeline');
+    expect(loggedOps).not.toContain('HomeTimeline');
+  });
+
+  test('does NOT do membership-stop even when knownIds provided (feed reorders like search)', async () => {
+    // All page-1 ids are "known" — a normal membership-stop would halt immediately.
+    // archiveFeed must ignore knownIds (always-full approach like archiveSearch).
+    const client = fakeClient({
+      _start: richFeedPage(['7', '8', '9'], 'c1'),
+      c1: richFeedPage(['10', '11', '12']),
+    });
+    const knownIds = new Set(['7', '8', '9']);
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    const results = await engine.archiveFeed({ knownIds });
+    // All 6 tweets collected — membership stop was NOT applied
+    expect(results.map((t) => t.id)).toEqual(['7', '8', '9', '10', '11', '12']);
+  });
+
+  test('respects limit option', async () => {
+    const client = fakeClient({
+      _start: richFeedPage(['10', '9', '8', '7', '6'], 'c1'),
+      c1: richFeedPage(['5', '4', '3']),
+    });
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    const results = await engine.archiveFeed({ limit: 3 });
+    expect(results).toHaveLength(3);
+    expect(results.map((t) => t.id)).toEqual(['10', '9', '8']);
+  });
+});
+
 describe('archiveBookmarks', () => {
   test('returns rich ArchiveTweet[] with media url and createdAtISO set', async () => {
     const client = fakeClient({ _start: richBookmarkPage(['100', '200']) });

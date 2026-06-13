@@ -138,6 +138,12 @@ export const COMMANDS: CommandDef[] = [
     usage: 'xrelay likes [<handle>] [--limit N]',
   },
   {
+    name: 'feed',
+    cost: 'medium',
+    summary: 'Your home timeline (for-you) or --following (chronological).',
+    usage: 'xrelay feed [--following] [--limit N]',
+  },
+  {
     name: 'archive',
     cost: 'medium — incremental',
     summary: 'Full-fidelity capture of bookmarks or a user timeline to a rich JSON archive.',
@@ -150,9 +156,11 @@ export const COMMANDS: CommandDef[] = [
       '              [--out <file.json>] [--limit N] [--stdout]\n' +
       '       xrelay archive list <list-id> [--out <file.json>] [--limit N] [--full] [--prune] [--stdout] [--since YYYY-MM-DD]\n' +
       '       xrelay archive likes [<handle>] [--out <file.json>] [--limit N] [--full] [--prune] [--stdout] [--since YYYY-MM-DD]\n' +
+      '       xrelay archive feed [--following] [--out <file.json>] [--limit N] [--stdout] [--since YYYY-MM-DD]\n' +
       '       Note: --since YYYY-MM-DD is a client-side post-filter (keeps tweets >= 00:00:00 UTC on that date).\n' +
       '             For search, --since also folds into the server-side query operator.\n' +
-      '             For likes, omitting <handle> archives YOUR likes (own-likes only since June 2024).',
+      '             For likes, omitting <handle> archives YOUR likes (own-likes only since June 2024).\n' +
+      '             For feed, --following uses the chronological following timeline; default is the algorithmic for-you feed.',
   },
   {
     name: 'whoami',

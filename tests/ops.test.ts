@@ -7,6 +7,7 @@ import {
   communityTweetsRequest,
   encodeParams,
   graphqlUrl,
+  homeTimelineRequest,
   likesRequest,
   searchRequest,
   tweetDetailRequest,
@@ -250,6 +251,78 @@ describe('likesRequest', () => {
     expect(
       (features as Record<string, unknown>).responsive_web_graphql_timeline_navigation_enabled,
     ).toBe(false);
+  });
+});
+
+describe('homeTimelineRequest', () => {
+  test('HomeTimeline op is present in OPS with the twitter-cli queryId', () => {
+    expect(OPS.HomeTimeline.queryId).toBe('HCosKfLNW1AcOo3la3mMgg');
+    expect(OPS.HomeTimeline.operationName).toBe('HomeTimeline');
+  });
+
+  test('HomeLatestTimeline op is present in OPS with the twitter-cli queryId', () => {
+    expect(OPS.HomeLatestTimeline.queryId).toBe('U0cdisy7QFIoTfu3-Okw0A');
+    expect(OPS.HomeLatestTimeline.operationName).toBe('HomeLatestTimeline');
+  });
+
+  test('graphqlUrl for HomeTimeline builds the correct URL', () => {
+    expect(graphqlUrl('HomeTimeline')).toBe(
+      'https://x.com/i/api/graphql/HCosKfLNW1AcOo3la3mMgg/HomeTimeline',
+    );
+  });
+
+  test('graphqlUrl for HomeLatestTimeline builds the correct URL', () => {
+    expect(graphqlUrl('HomeLatestTimeline')).toBe(
+      'https://x.com/i/api/graphql/U0cdisy7QFIoTfu3-Okw0A/HomeLatestTimeline',
+    );
+  });
+
+  test('latest:false (default) picks HomeTimeline op', () => {
+    const req = homeTimelineRequest({});
+    expect(req.op).toBe('HomeTimeline');
+  });
+
+  test('latest:true picks HomeLatestTimeline op', () => {
+    const req = homeTimelineRequest({ latest: true });
+    expect(req.op).toBe('HomeLatestTimeline');
+  });
+
+  test('encodes expected variables with correct defaults', () => {
+    const { variables } = homeTimelineRequest({});
+    const v = variables as Record<string, unknown>;
+    expect(v.count).toBe(20);
+    expect(v.includePromotedContent).toBe(false);
+    expect(v.latestControlAvailable).toBe(true);
+    expect(v.requestContext).toBe('launch');
+    expect(v.withCommunity).toBe(true);
+  });
+
+  test('passes cursor when provided', () => {
+    const { variables } = homeTimelineRequest({ cursor: 'C123' });
+    expect((variables as Record<string, unknown>).cursor).toBe('C123');
+  });
+
+  test('omits cursor when not provided', () => {
+    const { variables } = homeTimelineRequest({});
+    expect((variables as Record<string, unknown>).cursor).toBeUndefined();
+  });
+
+  test('kv overrides variables and ft overrides features', () => {
+    const { variables, features } = homeTimelineRequest({
+      kv: { count: 99 },
+      ft: { responsive_web_graphql_timeline_navigation_enabled: false },
+    });
+    expect((variables as Record<string, unknown>).count).toBe(99);
+    expect(
+      (features as Record<string, unknown>).responsive_web_graphql_timeline_navigation_enabled,
+    ).toBe(false);
+  });
+
+  test('includes base FEATURES blob', () => {
+    const { features } = homeTimelineRequest({});
+    expect(
+      (features as Record<string, unknown>).responsive_web_graphql_timeline_navigation_enabled,
+    ).toBe(FEATURES.responsive_web_graphql_timeline_navigation_enabled);
   });
 });
 

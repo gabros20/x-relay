@@ -16,6 +16,7 @@ export {
   runLikes,
   runQuoters,
   runTrends,
+  runFeed,
   runArticle,
   runMedia,
   runCommunity,

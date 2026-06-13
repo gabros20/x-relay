@@ -26,6 +26,7 @@ import {
   bookmarksRequest,
   communityRequest,
   communityTweetsRequest,
+  homeTimelineRequest,
   likesRequest,
   listRequest,
   searchRequest,
@@ -201,6 +202,22 @@ export interface Engine {
    * Requesting another user's likes will likely return an empty or error response.
    */
   archiveLikes(handle: string, opts?: ArchiveOpts): Promise<ArchiveTweet[]>;
+  /**
+   * Fetch the authenticated user's home timeline (slim research view) as a TweetPage.
+   * With `following: true` uses HomeLatestTimeline (chronological); otherwise HomeTimeline (algorithmic).
+   * No getUser lookup needed — the feed is always for the authenticated session.
+   */
+  feed(opts?: { following?: boolean; limit?: number }): Promise<TweetPage>;
+  /**
+   * Fetch the authenticated user's home timeline at full fidelity as ArchiveTweet[].
+   * With `following: true` uses HomeLatestTimeline (chronological); otherwise HomeTimeline (algorithmic).
+   *
+   * NOTE: The home feed reorders and injects promoted content run-to-run and is NOT
+   * reliably id-incremental (like search). Membership-stop is therefore unreliable —
+   * `knownIds` is always ignored and a full page-to-limit sweep is performed. Pass
+   * `limit` to cap how many tweets are collected.
+   */
+  archiveFeed(opts?: ArchiveOpts & { following?: boolean }): Promise<ArchiveTweet[]>;
   /** The authenticated user's own @handle (from the session), or null. Memoized. */
   me(): Promise<string | null>;
   /**
@@ -786,6 +803,32 @@ export function createEngine(deps: EngineDeps): Engine {
     },
 
     archiveLikes: archiveLikesImpl,
+
+    async feed(opts) {
+      const limit = opts?.limit ?? DEFAULT_LIMIT;
+      const latest = opts?.following === true;
+      return paginate(async (cursor) => {
+        const req = homeTimelineRequest({ cursor, latest });
+        const value = await call(req.op, req);
+        return parseTimeline(value);
+      }, limit);
+    },
+
+    archiveFeed(opts) {
+      const latest = opts?.following === true;
+      // The home feed reorders and injects content run-to-run — NOT id-monotonic.
+      // Membership-stop is unreliable (same as archiveSearch): always do a full
+      // page-to-limit sweep by passing { full: true, limit } and ignoring knownIds.
+      return archiveTimeline(
+        async (cursor) => {
+          const req = homeTimelineRequest({ cursor, latest });
+          const value = await call(req.op, req);
+          return parseTimeline(value, { rich: true });
+        },
+        { limit: opts?.limit, full: true },
+        sleep,
+      );
+    },
 
     async whoami() {
       const handle = await me();

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runArchive, runLikes, runWhoami } from '../src/commands/runners.ts';
+import { runArchive, runFeed, runLikes, runWhoami } from '../src/commands/runners.ts';
 import { type Engine, EngineError } from '../src/engine/index.ts';
 import type {
   ArchiveTweet,
@@ -51,6 +51,8 @@ interface FakeEngineOpts {
   searchTweets?: ArchiveTweet[];
   listTweets?: ArchiveTweet[];
   likesTweets?: ArchiveTweet[];
+  feedTweets?: ArchiveTweet[];
+  feedPage?: TweetPage;
   /** Override me() return value (default: 'me'). */
   meHandle?: string | null;
   /** When set, archiveUserPosts throws this EngineError code. */
@@ -144,6 +146,12 @@ function fakeEngine(archiveTweetsOrOpts: ArchiveTweet[] | FakeEngineOpts): Engin
         throw new EngineError(opts.archiveLikesError, `engine error: ${opts.archiveLikesError}`);
       }
       return opts.likesTweets ?? [];
+    },
+    async feed(): Promise<TweetPage> {
+      return opts.feedPage ?? { tweets: [] };
+    },
+    async archiveFeed(): Promise<ArchiveTweet[]> {
+      return opts.feedTweets ?? [];
     },
     async me(): Promise<string | null> {
       return opts.meHandle !== undefined ? opts.meHandle : 'me';
@@ -753,6 +761,106 @@ describe('runLikes research runner', () => {
     expect(env.ok).toBe(false);
     if (env.ok) return;
     expect(env.error.code).toBe('INVALID_INPUT');
+  });
+});
+
+// ── archive feed target ───────────────────────────────────────────────────────
+
+describe('runArchive — feed target', () => {
+  test('saves archive with source=feed', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'xrelay-arc-feed-'));
+    const out = join(dir, 'archive.json');
+    const tweets = [makeArchiveTweet('800'), makeArchiveTweet('700')];
+    const engine = fakeEngine({ feedTweets: tweets });
+
+    const env = await runArchive(engine, { target: 'feed', out });
+
+    expect(env.ok).toBe(true);
+    if (!env.ok) return;
+    expect(env.data.source).toBe('feed');
+    expect(env.data.added).toBe(2);
+    expect(env.data.total).toBe(2);
+    expect(env.data.newestId).toBe('800');
+    expect(env.data.out).toBe(out);
+    expect(env.data.handle).toBeUndefined(); // no handle for feed
+
+    rmSync(dir, { recursive: true });
+  });
+
+  test('--following flag passes through (no validation error)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'xrelay-arc-feed-'));
+    const out = join(dir, 'archive.json');
+    const tweets = [makeArchiveTweet('900')];
+    const engine = fakeEngine({ feedTweets: tweets });
+
+    const env = await runArchive(engine, { target: 'feed', out, following: true });
+
+    expect(env.ok).toBe(true);
+    if (!env.ok) return;
+    expect(env.data.source).toBe('feed');
+    expect(env.data.total).toBe(1);
+
+    rmSync(dir, { recursive: true });
+  });
+
+  test('--stdout prints JSON with source=feed without saving', async () => {
+    const tweets = [makeArchiveTweet('500')];
+    const engine = fakeEngine({ feedTweets: tweets });
+
+    const chunks: string[] = [];
+    const origWrite = process.stdout.write.bind(process.stdout);
+    // @ts-ignore override for test
+    process.stdout.write = (chunk: string) => {
+      chunks.push(chunk);
+      return true;
+    };
+
+    const env = await runArchive(engine, { target: 'feed', stdout: true });
+
+    // @ts-ignore restore
+    process.stdout.write = origWrite;
+
+    expect(env.ok).toBe(true);
+    if (!env.ok) return;
+    expect(env.data.out).toBeUndefined();
+    const json = JSON.parse(chunks.join(''));
+    expect(json.source).toBe('feed');
+    expect(json.tweets).toHaveLength(1);
+  });
+
+  test('missing --out and --stdout returns INVALID_INPUT', async () => {
+    const engine = fakeEngine({});
+    const env = await runArchive(engine, { target: 'feed' });
+    expect(env.ok).toBe(false);
+    if (env.ok) return;
+    expect(env.error.code).toBe('INVALID_INPUT');
+  });
+});
+
+// ── runFeed research runner ───────────────────────────────────────────────────
+
+describe('runFeed research runner', () => {
+  test('returns a TweetPage envelope for the for-you feed', async () => {
+    const page: TweetPage = {
+      tweets: [{ id: '1', url: '', text: 'x', author: {} as never, metrics: {} as never }],
+    };
+    const engine = fakeEngine({ feedPage: page });
+    const env = await runFeed(engine, {});
+    expect(env.ok).toBe(true);
+    if (!env.ok) return;
+    expect((env.data as TweetPage).tweets).toHaveLength(1);
+  });
+
+  test('following:true passes through without error', async () => {
+    const engine = fakeEngine({});
+    const env = await runFeed(engine, { following: true });
+    expect(env.ok).toBe(true);
+  });
+
+  test('limit is forwarded', async () => {
+    const engine = fakeEngine({});
+    const env = await runFeed(engine, { limit: 5 });
+    expect(env.ok).toBe(true);
   });
 });
 
