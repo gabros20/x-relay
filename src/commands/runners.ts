@@ -18,6 +18,8 @@ import { type Engine, EngineError } from '../engine/index.ts';
 import type { SearchProduct } from '../engine/ops.ts';
 import { err, ok } from '../output.ts';
 import type {
+  ArchiveFile,
+  ArchiveTweet,
   Envelope,
   MediaItem,
   SearchResult,
@@ -330,28 +332,49 @@ export interface ArchiveResult {
   newestId?: string;
 }
 
-/** Run the bookmarks archive path and return an ArchiveResult. */
-async function runArchiveBookmarks(
-  engine: Engine,
-  opts: ArchiveCommandOpts,
-): Promise<ArchiveResult> {
+/**
+ * The provenance + behavior a specific archive target supplies to runArchiveCore.
+ */
+interface ArchiveSpec {
+  /** Source label written to both the ArchiveFile and the ArchiveResult. */
+  source: ArchiveResult['source'];
+  /**
+   * Fetch the fresh tweets for this target. `knownIds` is provided for incremental
+   * (membership-stop) runs and is undefined on a full run.
+   */
+  fetch: (knownIds: Set<string> | undefined) => Promise<ArchiveTweet[]>;
+  /**
+   * Optional hook to stamp target-specific provenance onto the merged file
+   * (handle / query / listId). Runs after mergeArchive, before save/stdout.
+   */
+  patchFile?: (file: ArchiveFile) => void;
+  /** Optional @handle to surface on the ArchiveResult (user / my-posts). */
+  handle?: string;
+}
+
+/**
+ * Shared scaffolding for every archive target: load existing → derive knownIds
+ * (unless full) → fetch fresh → merge → patch provenance → stdout-or-save →
+ * build the ArchiveResult envelope payload. Targets supply only their fetch
+ * closure + provenance via ArchiveSpec, so T2–T6 become one-liners.
+ */
+async function runArchiveCore(opts: ArchiveCommandOpts, spec: ArchiveSpec): Promise<ArchiveResult> {
   const outPath = opts.out;
 
-  // Load existing archive to derive knownIds for incremental stop
+  // Load existing archive to derive knownIds for the incremental membership stop.
   const existing = outPath ? loadArchive(outPath) : null;
   const knownIds = !opts.full && existing ? new Set(existing.tweets.map((t) => t.id)) : undefined;
 
-  const fresh = await engine.archiveBookmarks({
-    ...(knownIds !== undefined ? { knownIds } : {}),
-    ...(opts.full ? { full: true } : {}),
-    ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
-  });
+  const fresh = await spec.fetch(knownIds);
 
   const generatedAt = new Date().toISOString();
   const { file, added } = mergeArchive(existing, fresh, {
     generatedAt,
     ...(opts.prune ? { prune: true } : {}),
   });
+
+  file.source = spec.source;
+  spec.patchFile?.(file);
 
   if (opts.stdout) {
     process.stdout.write(JSON.stringify(file, null, 2));
@@ -360,7 +383,8 @@ async function runArchiveBookmarks(
   }
 
   return {
-    source: 'bookmarks',
+    source: spec.source,
+    ...(spec.handle !== undefined ? { handle: spec.handle } : {}),
     ...(outPath ? { out: outPath } : {}),
     added,
     total: file.count,
@@ -368,82 +392,65 @@ async function runArchiveBookmarks(
   };
 }
 
-/** Run the user-posts archive path and return an ArchiveResult. */
-async function runArchiveUser(engine: Engine, opts: ArchiveCommandOpts): Promise<ArchiveResult> {
-  const handle = opts.handle;
-  if (!handle) throw new EngineError('INVALID_INPUT', 'archive user requires a handle');
-  const outPath = opts.out;
-
-  const existing = outPath ? loadArchive(outPath) : null;
-  const knownIds = !opts.full && existing ? new Set(existing.tweets.map((t) => t.id)) : undefined;
-
-  const fresh = await engine.archiveUserPosts(handle, {
+/** Engine-opts shared by all timeline archive fetches (limit/full/knownIds). */
+function archiveFetchOpts(
+  opts: ArchiveCommandOpts,
+  knownIds: Set<string> | undefined,
+): { knownIds?: Set<string>; full?: true; limit?: number } {
+  return {
     ...(knownIds !== undefined ? { knownIds } : {}),
     ...(opts.full ? { full: true } : {}),
     ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
-    ...(opts.replies ? { replies: true } : {}),
+  };
+}
+
+/** Run the bookmarks archive path and return an ArchiveResult. */
+function runArchiveBookmarks(engine: Engine, opts: ArchiveCommandOpts): Promise<ArchiveResult> {
+  return runArchiveCore(opts, {
+    source: 'bookmarks',
+    fetch: (knownIds) => engine.archiveBookmarks(archiveFetchOpts(opts, knownIds)),
   });
+}
 
-  const generatedAt = new Date().toISOString();
-  const { file, added } = mergeArchive(existing, fresh, {
-    generatedAt,
-    ...(opts.prune ? { prune: true } : {}),
-  });
-
-  file.source = 'user';
-  file.handle = handle;
-
-  if (opts.stdout) {
-    process.stdout.write(JSON.stringify(file, null, 2));
-  } else if (outPath) {
-    saveArchive(outPath, file);
-  }
-
-  return {
+/** Run the user-posts archive path and return an ArchiveResult. */
+function runArchiveUser(engine: Engine, opts: ArchiveCommandOpts): Promise<ArchiveResult> {
+  const handle = opts.handle;
+  if (!handle) throw new EngineError('INVALID_INPUT', 'archive user requires a handle');
+  return runArchiveCore(opts, {
     source: 'user',
     handle,
-    ...(outPath ? { out: outPath } : {}),
-    added,
-    total: file.count,
-    ...(file.newestId !== undefined ? { newestId: file.newestId } : {}),
-  };
+    patchFile: (file) => {
+      file.handle = handle;
+    },
+    fetch: (knownIds) =>
+      engine.archiveUserPosts(handle, {
+        ...archiveFetchOpts(opts, knownIds),
+        ...(opts.replies ? { replies: true } : {}),
+      }),
+  });
 }
 
 /** Run the my-posts archive path and return an ArchiveResult. */
 async function runArchiveMyPosts(engine: Engine, opts: ArchiveCommandOpts): Promise<ArchiveResult> {
-  const outPath = opts.out;
-
-  const existing = outPath ? loadArchive(outPath) : null;
-  const knownIds = !opts.full && existing ? new Set(existing.tweets.map((t) => t.id)) : undefined;
-
-  const fresh = await engine.archiveMyPosts({
-    ...(knownIds !== undefined ? { knownIds } : {}),
-    ...(opts.full ? { full: true } : {}),
-    ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
-    ...(opts.replies ? { replies: true } : {}),
-  });
-
-  const generatedAt = new Date().toISOString();
-  const { file, added } = mergeArchive(existing, fresh, {
-    generatedAt,
-    ...(opts.prune ? { prune: true } : {}),
-  });
-
-  file.source = 'my-posts';
-
-  if (opts.stdout) {
-    process.stdout.write(JSON.stringify(file, null, 2));
-  } else if (outPath) {
-    saveArchive(outPath, file);
-  }
-
-  return {
+  // Resolve self handle for provenance; me() is memoized so this adds no extra
+  // network call beyond the one archiveMyPosts already makes.
+  const handle = (await engine.me()) ?? undefined;
+  return runArchiveCore(opts, {
     source: 'my-posts',
-    ...(outPath ? { out: outPath } : {}),
-    added,
-    total: file.count,
-    ...(file.newestId !== undefined ? { newestId: file.newestId } : {}),
-  };
+    ...(handle !== undefined ? { handle } : {}),
+    ...(handle !== undefined
+      ? {
+          patchFile: (file: ArchiveFile) => {
+            file.handle = handle;
+          },
+        }
+      : {}),
+    fetch: (knownIds) =>
+      engine.archiveMyPosts({
+        ...archiveFetchOpts(opts, knownIds),
+        ...(opts.replies ? { replies: true } : {}),
+      }),
+  });
 }
 
 export function runArchive(

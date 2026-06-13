@@ -367,6 +367,7 @@ describe('runArchive — my-posts target', () => {
     expect(env.ok).toBe(true);
     if (!env.ok) return;
     expect(env.data.source).toBe('my-posts');
+    expect(env.data.handle).toBe('me'); // self handle resolved via me()
     expect(env.data.added).toBe(2);
     expect(env.data.total).toBe(2);
     expect(env.data.newestId).toBe('400');
@@ -374,6 +375,26 @@ describe('runArchive — my-posts target', () => {
     const { loadArchive } = await import('../src/archive.ts');
     const file = loadArchive(out);
     expect(file?.source).toBe('my-posts');
+    expect(file?.handle).toBe('me'); // provenance stamped on the file too
+
+    rmSync(dir, { recursive: true });
+  });
+
+  test('my-posts without a resolvable handle omits handle (me() null)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'xrelay-arc-'));
+    const out = join(dir, 'archive.json');
+    const engine = fakeEngine({ myPosts: [makeArchiveTweet('400')], meHandle: null });
+
+    const env = await runArchive(engine, { target: 'my-posts', out });
+
+    expect(env.ok).toBe(true);
+    if (!env.ok) return;
+    expect(env.data.source).toBe('my-posts');
+    expect(env.data.handle).toBeUndefined();
+
+    const { loadArchive } = await import('../src/archive.ts');
+    const file = loadArchive(out);
+    expect(file?.handle).toBeUndefined();
 
     rmSync(dir, { recursive: true });
   });
