@@ -211,6 +211,6 @@ export interface ArchiveFile {
   handle?: string;
   /** For list archives: the list id. */
   listId?: string;
-  /** Archived tweets, newest-bookmarked first. */
+  /** Archived tweets, in source order (newest first). */
   tweets: ArchiveTweet[];
 }

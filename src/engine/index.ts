@@ -94,7 +94,8 @@ export interface PageOpts {
   stopAtId?: string;
 }
 
-export interface ArchiveBookmarksOpts {
+/** Shared options for any rich-archive timeline sweep (bookmarks/user/list/search/likes/feed). */
+export interface ArchiveOpts {
   /** Maximum number of tweets to collect (default: DEFAULT_LIMIT). */
   limit?: number;
   /**
@@ -108,6 +109,8 @@ export interface ArchiveBookmarksOpts {
    */
   full?: boolean;
 }
+
+export interface ArchiveBookmarksOpts extends ArchiveOpts {}
 
 /** Snowflake ids are time-ordered; compare as BigInt, falling back to string length/compare. */
 function idLte(a: string, b: string): boolean {
@@ -312,7 +315,7 @@ async function paginateUsers(
  */
 async function archiveTimeline(
   fetchPage: (cursor?: string) => Promise<TweetPage>,
-  opts: ArchiveBookmarksOpts,
+  opts: ArchiveOpts,
   sleep: (ms: number) => Promise<void>,
 ): Promise<ArchiveTweet[]> {
   const limit = opts.limit ?? DEFAULT_LIMIT;

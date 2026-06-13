@@ -298,7 +298,7 @@ function viewCache(source: CacheSource, opts: CacheViewOpts, added?: number): Ca
 // ── archive ──────────────────────────────────────────────────────────────────
 
 export interface ArchiveCommandOpts {
-  /** The archive sub-target, currently only 'bookmarks'. */
+  /** The archive sub-target: bookmarks | user | my-posts | list | search | likes | feed. */
   target: string;
   /** Output file path. Required unless --stdout. */
   out?: string;
@@ -366,7 +366,8 @@ export function runArchive(
   engine: Engine,
   opts: ArchiveCommandOpts,
 ): Promise<Envelope<ArchiveResult>> {
-  if (!opts.stdout && !opts.out && opts.target === 'bookmarks') {
+  // Output destination is required for every target, so validate before dispatch.
+  if (!opts.stdout && !opts.out) {
     return Promise.resolve(
       err('archive', 'INVALID_INPUT', 'provide --out <file.json> or --stdout'),
     );
