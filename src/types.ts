@@ -199,12 +199,18 @@ export interface ArchiveTweet {
 /** The top-level JSON envelope for an xrelay archive file. */
 export interface ArchiveFile {
   schema: 'x-relay/archive@1';
-  source: 'bookmarks';
+  source: 'bookmarks' | 'user' | 'my-posts' | 'list' | 'search' | 'likes' | 'feed';
   /** ISO timestamp of when the archive was generated. */
   generatedAt: string;
   count: number;
   /** Max tweet id present in the file (reference for display). */
   newestId?: string;
+  /** For search archives: the query string used. */
+  query?: string;
+  /** For user / my-posts / likes archives: the target @handle. */
+  handle?: string;
+  /** For list archives: the list id. */
+  listId?: string;
   /** Archived tweets, newest-bookmarked first. */
   tweets: ArchiveTweet[];
 }

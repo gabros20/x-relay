@@ -313,7 +313,7 @@ export interface ArchiveCommandOpts {
 }
 
 export interface ArchiveResult {
-  source: 'bookmarks';
+  source: 'bookmarks' | 'user' | 'my-posts' | 'list' | 'search' | 'likes' | 'feed';
   /** Path the file was written to (undefined when --stdout). */
   out?: string;
   /** Number of newly added tweets (not in the prior archive). */
@@ -324,53 +324,74 @@ export interface ArchiveResult {
   newestId?: string;
 }
 
+/** Run the bookmarks archive path and return an ArchiveResult. */
+async function runArchiveBookmarks(
+  engine: Engine,
+  opts: ArchiveCommandOpts,
+): Promise<ArchiveResult> {
+  const outPath = opts.out;
+
+  // Load existing archive to derive knownIds for incremental stop
+  const existing = outPath ? loadArchive(outPath) : null;
+  const knownIds = !opts.full && existing ? new Set(existing.tweets.map((t) => t.id)) : undefined;
+
+  const fresh = await engine.archiveBookmarks({
+    ...(knownIds !== undefined ? { knownIds } : {}),
+    ...(opts.full ? { full: true } : {}),
+    ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
+  });
+
+  const generatedAt = new Date().toISOString();
+  const { file, added } = mergeArchive(existing, fresh, {
+    generatedAt,
+    ...(opts.prune ? { prune: true } : {}),
+  });
+
+  if (opts.stdout) {
+    process.stdout.write(JSON.stringify(file, null, 2));
+  } else if (outPath) {
+    saveArchive(outPath, file);
+  }
+
+  return {
+    source: 'bookmarks',
+    ...(outPath ? { out: outPath } : {}),
+    added,
+    total: file.count,
+    ...(file.newestId !== undefined ? { newestId: file.newestId } : {}),
+  };
+}
+
 export function runArchive(
   engine: Engine,
   opts: ArchiveCommandOpts,
 ): Promise<Envelope<ArchiveResult>> {
-  if (opts.target !== 'bookmarks') {
-    return Promise.resolve(
-      err('archive', 'INVALID_INPUT', `unknown archive target: ${opts.target}`),
-    );
-  }
-  if (!opts.stdout && !opts.out) {
+  if (!opts.stdout && !opts.out && opts.target === 'bookmarks') {
     return Promise.resolve(
       err('archive', 'INVALID_INPUT', 'provide --out <file.json> or --stdout'),
     );
   }
-  return guard('archive', async () => {
-    const outPath = opts.out;
 
-    // Load existing archive to derive knownIds for incremental stop
-    const existing = outPath ? loadArchive(outPath) : null;
-    const knownIds = !opts.full && existing ? new Set(existing.tweets.map((t) => t.id)) : undefined;
+  switch (opts.target) {
+    case 'bookmarks':
+      return guard('archive', () => runArchiveBookmarks(engine, opts));
 
-    const fresh = await engine.archiveBookmarks({
-      ...(knownIds !== undefined ? { knownIds } : {}),
-      ...(opts.full ? { full: true } : {}),
-      ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
-    });
+    // Future targets (T1–T6) — each will replace this arm with a real handler.
+    case 'user':
+    case 'my-posts':
+    case 'list':
+    case 'search':
+    case 'likes':
+    case 'feed':
+      return Promise.resolve(
+        err('archive', 'INVALID_INPUT', `archive target '${opts.target}' is not yet implemented`),
+      );
 
-    const generatedAt = new Date().toISOString();
-    const { file, added } = mergeArchive(existing, fresh, {
-      generatedAt,
-      ...(opts.prune ? { prune: true } : {}),
-    });
-
-    if (opts.stdout) {
-      process.stdout.write(JSON.stringify(file, null, 2));
-    } else if (outPath) {
-      saveArchive(outPath, file);
-    }
-
-    return {
-      source: 'bookmarks' as const,
-      ...(outPath ? { out: outPath } : {}),
-      added,
-      total: file.count,
-      ...(file.newestId !== undefined ? { newestId: file.newestId } : {}),
-    };
-  });
+    default:
+      return Promise.resolve(
+        err('archive', 'INVALID_INPUT', `unknown archive target: ${opts.target}`),
+      );
+  }
 }
 
 // ── sync ────────────────────────────────────────────────────────────────────

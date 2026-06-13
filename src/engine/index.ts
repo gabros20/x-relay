@@ -301,6 +301,51 @@ async function paginateUsers(
   return out;
 }
 
+/**
+ * Core pagination loop for rich-fidelity archive collection.
+ * Shared by all archive targets (bookmarks, user, list, search, likes, feed).
+ *
+ * @param fetchPage  - Function that fetches one page given an optional cursor.
+ * @param opts       - Limit, knownIds (for membership-stop), and full-mode flag.
+ * @param sleep      - Injectable sleep (for jittered inter-page pacing on full runs).
+ * @returns          - Collected ArchiveTweet[] (up to limit, de-duped, in source order).
+ */
+async function archiveTimeline(
+  fetchPage: (cursor?: string) => Promise<TweetPage>,
+  opts: ArchiveBookmarksOpts,
+  sleep: (ms: number) => Promise<void>,
+): Promise<ArchiveTweet[]> {
+  const limit = opts.limit ?? DEFAULT_LIMIT;
+  const full = opts.full === true;
+  const knownIds = opts.knownIds;
+
+  // Build membership stop only for incremental (non-full) runs when knownIds is given.
+  const membershipStop: MembershipStop | undefined =
+    !full && knownIds !== undefined && knownIds.size > 0
+      ? { isKnown: (id) => knownIds.has(id) }
+      : undefined;
+
+  let pageCount = 0;
+  const page = await paginate(
+    async (cursor) => {
+      // Polite pacing for full runs: a jittered delay between pages keeps a
+      // single-account, ~125-page sweep under X's rate limits (skip first page).
+      if (full && pageCount > 0) {
+        await sleep(
+          ARCHIVE_PAGE_DELAY_MIN_MS + Math.floor(Math.random() * ARCHIVE_PAGE_DELAY_JITTER_MS),
+        );
+      }
+      pageCount += 1;
+      return fetchPage(cursor);
+    },
+    limit,
+    undefined,
+    membershipStop,
+  );
+
+  return page.tweets.map(toArchiveTweet);
+}
+
 export function createEngine(deps: EngineDeps): Engine {
   const baseFetch = deps.fetchImpl ?? fetch;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
@@ -583,37 +628,15 @@ export function createEngine(deps: EngineDeps): Engine {
       return parseCommunity(value);
     },
 
-    async archiveBookmarks(opts) {
-      const limit = opts?.limit ?? DEFAULT_LIMIT;
-      const full = opts?.full === true;
-      const knownIds = opts?.knownIds;
-
-      // Build membership stop only for incremental (non-full) runs when knownIds is given.
-      const membershipStop: MembershipStop | undefined =
-        !full && knownIds !== undefined && knownIds.size > 0
-          ? { isKnown: (id) => knownIds.has(id) }
-          : undefined;
-
-      let pageCount = 0;
-      const page = await paginate(
+    archiveBookmarks(opts) {
+      return archiveTimeline(
         async (cursor) => {
-          // Polite pacing for full runs: a jittered delay between pages keeps a
-          // single-account, ~125-page sweep under X's rate limits (skip first page).
-          if (full && pageCount > 0) {
-            await sleep(
-              ARCHIVE_PAGE_DELAY_MIN_MS + Math.floor(Math.random() * ARCHIVE_PAGE_DELAY_JITTER_MS),
-            );
-          }
-          pageCount += 1;
           const value = await call('Bookmarks', bookmarksRequest({ cursor, count: 40 }));
           return parseTimeline(value, { rich: true });
         },
-        limit,
-        undefined,
-        membershipStop,
+        opts ?? {},
+        sleep,
       );
-
-      return page.tweets.map(toArchiveTweet);
     },
   };
 
