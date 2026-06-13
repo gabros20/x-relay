@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import type { Cookies } from '../src/engine/auth.ts';
+import type { ClientResult } from '../src/engine/client.ts';
 import { type EngineClient, EngineError, createEngine } from '../src/engine/index.ts';
+import { type MutationBody, OPS, type OpName } from '../src/engine/ops.ts';
 import type { ArchiveTweet } from '../src/types.ts';
 
 const cookies: Cookies = { authToken: 'a', ct0: 'b' };
@@ -1364,5 +1366,134 @@ describe('archiveBookmarkFolder', () => {
     const engine = createEngine({ cookies, client, sleep: async () => {} });
     const results = await engine.archiveBookmarkFolder('folder-abc', { knownIds, full: true });
     expect(results.map((t) => t.id)).toEqual(['10', '9', '8', '7', '6', '5']);
+  });
+});
+
+describe('mutate (write plumbing)', () => {
+  /** A client whose post() records the call and returns a canned result. */
+  function postClient(result: ClientResult, log?: Array<{ op: string; body: MutationBody }>) {
+    return {
+      get: async () => ({ ok: true as const, value: {} }),
+      post: async (op: OpName, body: MutationBody) => {
+        log?.push({ op, body });
+        return result;
+      },
+    };
+  }
+
+  test('calls client.post, applies the (injected) write-delay, returns data', async () => {
+    const log: Array<{ op: string; body: MutationBody }> = [];
+    const sleeps: number[] = [];
+    const client = postClient({ ok: true, value: { data: { favorite_tweet: 'Done' } } }, log);
+    const engine = createEngine({
+      cookies,
+      client,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+    });
+
+    const data = await engine.mutate('FavoriteTweet', { tweet_id: '20' });
+
+    // mutate unwraps the GraphQL `data` envelope for its callers (T8–T10).
+    expect(data).toEqual({ favorite_tweet: 'Done' });
+    expect(log).toHaveLength(1);
+    expect(log[0]?.op).toBe('FavoriteTweet');
+    expect(log[0]?.body).toEqual({
+      variables: { tweet_id: '20' },
+      queryId: OPS.FavoriteTweet.queryId,
+    });
+    // The write-delay was applied at least once.
+    expect(sleeps.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('throws EngineError mapping the client error code on failure', async () => {
+    const client = postClient({ ok: false, error: { code: 'AUTH_FAILED', message: 'bad csrf' } });
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    await expect(engine.mutate('DeleteTweet', { tweet_id: '1' })).rejects.toMatchObject({
+      code: 'AUTH_FAILED',
+    });
+  });
+
+  test('maps an already-performed / duplicate error in the response to ALREADY_DONE', async () => {
+    // X returns 200 with an errors[] for a duplicate favorite ("already favorited").
+    const client = postClient({
+      ok: true,
+      value: { errors: [{ code: 139, message: 'You have already favorited this Tweet.' }] },
+    });
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    await expect(engine.mutate('FavoriteTweet', { tweet_id: '1' })).rejects.toMatchObject({
+      code: 'ALREADY_DONE',
+    });
+  });
+
+  test('withFeatures attaches the FEATURES blob to the posted body', async () => {
+    const log: Array<{ op: string; body: MutationBody }> = [];
+    const client = postClient({ ok: true, value: { data: {} } }, log);
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    await engine.mutate('CreateTweet', { tweet_text: 'hi' }, { withFeatures: true });
+    expect(log[0]?.body.features).toBeDefined();
+  });
+});
+
+describe('friendshipAction (v1.1 REST write)', () => {
+  test('POSTs the create endpoint form-encoded with the csrf header', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fakeFetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), init });
+      return new Response(JSON.stringify({ id_str: '44196397', following: true }), { status: 200 });
+    }) as typeof fetch;
+    const engine = createEngine({
+      cookies,
+      client: { get: async () => ({ ok: true, value: {} }) },
+      fetchImpl: fakeFetch,
+      transaction: async () => 'fake-txid',
+      sleep: async () => {},
+    });
+
+    const data = await engine.friendshipAction('create', '44196397');
+
+    expect((data as { following?: boolean }).following).toBe(true);
+    const call = calls[0];
+    expect(call).toBeDefined();
+    if (call === undefined) throw new Error('no call');
+    expect(call.url).toBe('https://x.com/i/api/1.1/friendships/create.json');
+    expect(call.init?.method).toBe('POST');
+    const headers = call.init?.headers as Record<string, string>;
+    expect(headers['x-csrf-token']).toBe(cookies.ct0);
+    expect(headers['content-type']).toBe('application/x-www-form-urlencoded');
+    const body = String(call.init?.body);
+    expect(body).toContain('user_id=44196397');
+    expect(body).toContain('include_profile_interstitial_type=1');
+  });
+
+  test('destroy targets the destroy endpoint', async () => {
+    const calls: string[] = [];
+    const fakeFetch = (async (url: string | URL | Request) => {
+      calls.push(String(url));
+      return new Response(JSON.stringify({ id_str: '1' }), { status: 200 });
+    }) as typeof fetch;
+    const engine = createEngine({
+      cookies,
+      client: { get: async () => ({ ok: true, value: {} }) },
+      fetchImpl: fakeFetch,
+      transaction: async () => 'fake-txid',
+      sleep: async () => {},
+    });
+
+    await engine.friendshipAction('destroy', '1');
+    expect(calls[0]).toBe('https://x.com/i/api/1.1/friendships/destroy.json');
+  });
+
+  test('throws EngineError on a non-ok response', async () => {
+    const fakeFetch = (async () => new Response('forbidden', { status: 403 })) as typeof fetch;
+    const engine = createEngine({
+      cookies,
+      client: { get: async () => ({ ok: true, value: {} }) },
+      fetchImpl: fakeFetch,
+      transaction: async () => 'fake-txid',
+      sleep: async () => {},
+    });
+    await expect(engine.friendshipAction('create', '1')).rejects.toThrow(EngineError);
   });
 });

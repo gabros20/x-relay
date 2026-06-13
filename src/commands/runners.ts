@@ -50,6 +50,45 @@ async function guard<T>(command: string, fn: () => Promise<T>): Promise<Envelope
   }
 }
 
+// ── destructive-write confirmation guard (convention for T8–T10) ─────────────
+//
+// CONVENTION: every destructive write command (delete-tweet, unfollow, …) takes a
+// `confirmed` flag in its opts and, as its FIRST step, calls requireConfirmation.
+// Without `confirmed: true` the runner returns a CONFIRMATION_REQUIRED error
+// envelope and performs NO network call — so a destructive action never fires by
+// accident from the CLI / MCP surface. The actual delete command lands in T10;
+// T7 only establishes the convention + this helper. Non-destructive writes
+// (like / bookmark / retweet) do NOT need confirmation.
+
+/** Opts mixin: destructive write runners extend this so `confirmed` is uniform. */
+export interface ConfirmableOpts {
+  /** Must be explicitly true for a destructive write to proceed. */
+  confirmed?: boolean;
+}
+
+/**
+ * Gate a destructive write on an explicit confirmation. Returns a
+ * CONFIRMATION_REQUIRED error envelope when `confirmed` is not true, otherwise
+ * null (proceed). Usage:
+ *
+ *   const block = requireConfirmation('delete-tweet', opts, 'permanently delete tweet 20');
+ *   if (block) return block;
+ *   return guard('delete-tweet', () => engine.mutate('DeleteTweet', { tweet_id }));
+ */
+export function requireConfirmation(
+  command: string,
+  opts: ConfirmableOpts,
+  action: string,
+): Envelope<never> | null {
+  if (opts.confirmed === true) return null;
+  return err(
+    command,
+    'CONFIRMATION_REQUIRED',
+    `Refusing to ${action} without confirmation.`,
+    'Re-run with --confirm (or pass confirmed: true) to proceed.',
+  );
+}
+
 export interface SearchCommandOpts extends Omit<SearchQueryFlags, 'query'> {
   query: string;
   limit?: number;

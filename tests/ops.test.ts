@@ -11,6 +11,7 @@ import {
   graphqlUrl,
   homeTimelineRequest,
   likesRequest,
+  mutationBody,
   searchRequest,
   tweetDetailRequest,
   userByScreenNameRequest,
@@ -408,6 +409,71 @@ describe('bookmarkFolderTimelineRequest', () => {
   test('omits cursor when not provided', () => {
     const { variables } = bookmarkFolderTimelineRequest({ folderId: 'f1' });
     expect((variables as Record<string, unknown>).cursor).toBeUndefined();
+  });
+});
+
+describe('write ops (mutations)', () => {
+  // queryIds from twitter-cli FALLBACK_QUERY_IDS.
+  const expected = {
+    CreateTweet: 'bDE2rBtZb3uyrczSZ_pI9g',
+    DeleteTweet: 'VaenaVgh5q5ih7kvyVjgtg',
+    FavoriteTweet: 'lI07N6Otwv1PhnEgXILM7A',
+    UnfavoriteTweet: 'ZYKSe-w7KEslx3JhSIk5LA',
+    CreateRetweet: 'ojPdsZsimiJrUGLR1sjVsA',
+    DeleteRetweet: 'iQtK4dl5hBmXewYZuEOKVw',
+    CreateBookmark: 'aoDbu3RHznuiSkQ9aNM67Q',
+    DeleteBookmark: 'Wlmlj2-xISYCixDmuS8KNg',
+  } as const;
+
+  test('every write op is present with the twitter-cli queryId + matching operationName', () => {
+    for (const [op, queryId] of Object.entries(expected)) {
+      const entry = OPS[op as keyof typeof OPS];
+      expect(entry.queryId).toBe(queryId);
+      expect(entry.operationName).toBe(op);
+    }
+  });
+
+  test('graphqlUrl resolves a write op to the /graphql/<id>/<OperationName> URL', () => {
+    expect(graphqlUrl('CreateTweet')).toBe(
+      'https://x.com/i/api/graphql/bDE2rBtZb3uyrczSZ_pI9g/CreateTweet',
+    );
+    expect(graphqlUrl('DeleteTweet')).toBe(
+      'https://x.com/i/api/graphql/VaenaVgh5q5ih7kvyVjgtg/DeleteTweet',
+    );
+  });
+});
+
+describe('mutationBody', () => {
+  test('builds { variables, queryId } for a write op, no features by default', () => {
+    const body = mutationBody('FavoriteTweet', { tweet_id: '20' });
+    expect(body).toEqual({ variables: { tweet_id: '20' }, queryId: 'lI07N6Otwv1PhnEgXILM7A' });
+    expect('features' in body).toBe(false);
+  });
+
+  test('uses the queryId for the named op', () => {
+    expect(mutationBody('CreateBookmark', { tweet_id: '1' }).queryId).toBe(
+      'aoDbu3RHznuiSkQ9aNM67Q',
+    );
+    expect(mutationBody('DeleteBookmark', { tweet_id: '1' }).queryId).toBe(
+      'Wlmlj2-xISYCixDmuS8KNg',
+    );
+  });
+
+  test('passes the variables object through untouched', () => {
+    const variables = { tweet_text: 'hello', dark_request: false, media: { media_entities: [] } };
+    const body = mutationBody('CreateTweet', variables);
+    expect(body.variables).toEqual(variables);
+    expect(body.queryId).toBe('bDE2rBtZb3uyrczSZ_pI9g');
+  });
+
+  test('withFeatures:true attaches the FEATURES blob', () => {
+    const body = mutationBody('CreateTweet', { tweet_text: 'hi' }, true);
+    expect(body.features).toEqual(FEATURES);
+  });
+
+  test('omits features when withFeatures is false/absent', () => {
+    expect(mutationBody('DeleteTweet', { tweet_id: '1' }).features).toBeUndefined();
+    expect(mutationBody('DeleteTweet', { tweet_id: '1' }, false).features).toBeUndefined();
   });
 });
 

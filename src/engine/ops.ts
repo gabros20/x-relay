@@ -52,6 +52,17 @@ export const OPS = {
     queryId: 'hNY7X2xE2N7HVF6Qb_mu6w',
     operationName: 'BookmarkFolderTimeline',
   },
+  // --- Write ops (mutations) — POSTed via client.post (queryIds from
+  // twitter-cli FALLBACK_QUERY_IDS). Same rotation caveat as the read ops above:
+  // a 404 on the URL or `(336) features cannot be null` means refresh these. ---
+  CreateTweet: { queryId: 'bDE2rBtZb3uyrczSZ_pI9g', operationName: 'CreateTweet' },
+  DeleteTweet: { queryId: 'VaenaVgh5q5ih7kvyVjgtg', operationName: 'DeleteTweet' },
+  FavoriteTweet: { queryId: 'lI07N6Otwv1PhnEgXILM7A', operationName: 'FavoriteTweet' },
+  UnfavoriteTweet: { queryId: 'ZYKSe-w7KEslx3JhSIk5LA', operationName: 'UnfavoriteTweet' },
+  CreateRetweet: { queryId: 'ojPdsZsimiJrUGLR1sjVsA', operationName: 'CreateRetweet' },
+  DeleteRetweet: { queryId: 'iQtK4dl5hBmXewYZuEOKVw', operationName: 'DeleteRetweet' },
+  CreateBookmark: { queryId: 'aoDbu3RHznuiSkQ9aNM67Q', operationName: 'CreateBookmark' },
+  DeleteBookmark: { queryId: 'Wlmlj2-xISYCixDmuS8KNg', operationName: 'DeleteBookmark' },
 } as const satisfies Record<string, { queryId: string; operationName: string }>;
 
 export type OpName = keyof typeof OPS;
@@ -123,6 +134,29 @@ export interface BuiltRequest {
 /** A built request that also names the op it targets (for url resolution). */
 interface OpRequest extends BuiltRequest {
   op: OpName;
+}
+
+/**
+ * The JSON body for a GraphQL mutation POST: `{ variables, queryId, features? }`.
+ * Unlike reads (GET, params in the query string), writes send this as the request
+ * body. `features` is only attached for ops that need it (e.g. CreateTweet).
+ */
+export interface MutationBody {
+  variables: Vars;
+  queryId: string;
+  features?: Feats;
+}
+
+/**
+ * Build the POST body for a write op. Returns `{ variables, queryId }`, plus the
+ * FEATURES blob when `withFeatures` is true (CreateTweet and friends require it;
+ * simple toggles like FavoriteTweet/CreateBookmark do not). The op's queryId is
+ * read from OPS so it stays in the one rotation-aware config.
+ */
+export function mutationBody(op: OpName, variables: Vars, withFeatures = false): MutationBody {
+  const body: MutationBody = { variables, queryId: OPS[op].queryId };
+  if (withFeatures) body.features = { ...FEATURES };
+  return body;
 }
 
 interface Overrides {

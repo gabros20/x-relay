@@ -8,7 +8,7 @@
 
 import type { Cookies } from './auth.ts';
 import { buildHeaders } from './auth.ts';
-import type { BuiltRequest, OpName } from './ops.ts';
+import type { BuiltRequest, MutationBody, OpName } from './ops.ts';
 import { encodeParams, graphqlUrl } from './ops.ts';
 
 /** Yields the x-client-transaction-id for a request (method + path bound). */
@@ -106,6 +106,7 @@ function terminalError(op: OpName, status: number, body: unknown): ClientResult 
 
 export function createClient(args: CreateClientArgs): {
   get(op: OpName, request: BuiltRequest): Promise<ClientResult>;
+  post(op: OpName, body: MutationBody): Promise<ClientResult>;
 } {
   const {
     cookies,
@@ -116,12 +117,32 @@ export function createClient(args: CreateClientArgs): {
     clientLanguage,
   } = args;
 
-  async function fetchOnce(op: OpName, request: BuiltRequest): Promise<Response> {
+  // Reads are GET with the request encoded into the query string; writes are POST
+  // with the mutation body as JSON. Both share buildHeaders (which already sets
+  // x-csrf-token from ct0 + content-type: application/json) and the retry policy.
+  function fetchGet(op: OpName, request: BuiltRequest): Promise<Response> {
     const url = `${graphqlUrl(op)}?${encodeParams(request)}`;
     const path = new URL(url).pathname;
-    const txid = await transaction('GET', path);
+    return issue('GET', url, path);
+  }
+
+  function fetchPost(op: OpName, body: MutationBody): Promise<Response> {
+    const url = graphqlUrl(op);
+    const path = new URL(url).pathname;
+    return issue('POST', url, path, JSON.stringify(body));
+  }
+
+  async function issue(
+    method: 'GET' | 'POST',
+    url: string,
+    path: string,
+    body?: string,
+  ): Promise<Response> {
+    const txid = await transaction(method, path);
     const headers = buildHeaders({ cookies, transactionId: txid, clientLanguage });
-    return fetchImpl(url, { method: 'GET', headers });
+    const init: RequestInit = { method, headers };
+    if (body !== undefined) init.body = body;
+    return fetchImpl(url, init);
   }
 
   // Classify one response into either a terminal result or a retry directive,
@@ -171,13 +192,16 @@ export function createClient(args: CreateClientArgs): {
     return terminalError(op, status, body);
   }
 
-  async function get(op: OpName, request: BuiltRequest): Promise<ClientResult> {
+  // Shared drive loop: (re)issue via `fetchOnce` until classify yields a terminal
+  // result, sleeping between rate-limit/stale-txid retries. Method-agnostic so
+  // get() and post() get identical resilience + error-envelope mapping.
+  async function run(op: OpName, fetchOnce: () => Promise<Response>): Promise<ClientResult> {
     const retries = { rateLimit: 0, notFound: 0 };
 
     for (;;) {
       let res: Response;
       try {
-        res = await fetchOnce(op, request);
+        res = await fetchOnce();
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return { ok: false, error: { code: 'FETCH_FAILED', message } };
@@ -189,5 +213,13 @@ export function createClient(args: CreateClientArgs): {
     }
   }
 
-  return { get };
+  function get(op: OpName, request: BuiltRequest): Promise<ClientResult> {
+    return run(op, () => fetchGet(op, request));
+  }
+
+  function post(op: OpName, body: MutationBody): Promise<ClientResult> {
+    return run(op, () => fetchPost(op, body));
+  }
+
+  return { get, post };
 }

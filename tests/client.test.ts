@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { Cookies } from '../src/engine/auth.ts';
 import { createClient } from '../src/engine/client.ts';
-import { type BuiltRequest, searchRequest } from '../src/engine/ops.ts';
+import { type BuiltRequest, mutationBody, searchRequest } from '../src/engine/ops.ts';
 
 const COOKIES: Cookies = { authToken: 'abc', ct0: 'def' };
 const REQUEST: BuiltRequest = searchRequest({ query: 'hello' });
@@ -329,5 +329,168 @@ describe('createClient.get', () => {
     if (result.ok) throw new Error('expected failure');
     expect(result.error.code).toBe('NOT_FOUND');
     expect(result.error.status).toBe(404);
+  });
+});
+
+describe('createClient.post', () => {
+  const BODY = mutationBody('FavoriteTweet', { tweet_id: '20' });
+
+  test('200 json returns ok + parsed value; one txid; no sleep', async () => {
+    const fetchImpl = fakeFetch([jsonResponse({ data: { favorite_tweet: 'Done' } })]);
+    const sleep = sleepSpy();
+    const txn = transactionSpy();
+    const client = createClient({
+      cookies: COOKIES,
+      transaction: txn.fn,
+      fetchImpl: fetchImpl.fn,
+      sleep: sleep.fn,
+    });
+
+    const result = await client.post('FavoriteTweet', BODY);
+
+    expect(result).toEqual({ ok: true, value: { data: { favorite_tweet: 'Done' } } });
+    expect(txn.count()).toBe(1);
+    expect(sleep.calls.length).toBe(0);
+  });
+
+  test('issues a POST to the graphql url with the JSON body + csrf header from ct0', async () => {
+    const fetchImpl = fakeFetch([jsonResponse({ data: {} })]);
+    const txn = transactionSpy();
+    const client = createClient({
+      cookies: COOKIES,
+      transaction: txn.fn,
+      fetchImpl: fetchImpl.fn,
+      sleep: sleepSpy().fn,
+    });
+
+    await client.post('FavoriteTweet', BODY);
+
+    const call = fetchImpl.calls[0];
+    expect(call).toBeDefined();
+    if (call === undefined) throw new Error('no call');
+    expect(call.url).toBe('https://x.com/i/api/graphql/lI07N6Otwv1PhnEgXILM7A/FavoriteTweet');
+    expect(call.url).not.toContain('?');
+    expect(call.init?.method).toBe('POST');
+    const headers = call.init?.headers as Record<string, string>;
+    expect(headers['x-csrf-token']).toBe(COOKIES.ct0);
+    expect(headers['content-type']).toBe('application/json');
+    expect(headers['x-client-transaction-id']).toBe('txid-1');
+    expect(call.init?.body).toBe(JSON.stringify(BODY));
+  });
+
+  test('passes POST + the request path to the transaction provider', async () => {
+    const seen: Array<{ method: string; path: string }> = [];
+    const fetchImpl = fakeFetch([jsonResponse({ data: {} })]);
+    const client = createClient({
+      cookies: COOKIES,
+      transaction: (method, path) => {
+        seen.push({ method, path });
+        return Promise.resolve('txid');
+      },
+      fetchImpl: fetchImpl.fn,
+      sleep: sleepSpy().fn,
+    });
+
+    await client.post('FavoriteTweet', BODY);
+
+    expect(seen[0]).toEqual({
+      method: 'POST',
+      path: '/i/api/graphql/lI07N6Otwv1PhnEgXILM7A/FavoriteTweet',
+    });
+  });
+
+  test('403 → AUTH_FAILED', async () => {
+    const fetchImpl = fakeFetch([new Response('forbidden', { status: 403 })]);
+    const client = createClient({
+      cookies: COOKIES,
+      transaction: transactionSpy().fn,
+      fetchImpl: fetchImpl.fn,
+      sleep: sleepSpy().fn,
+    });
+
+    const result = await client.post('FavoriteTweet', BODY);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected failure');
+    expect(result.error.code).toBe('AUTH_FAILED');
+    expect(result.error.status).toBe(403);
+  });
+
+  test('400 generic → BAD_REQUEST', async () => {
+    const fetchImpl = fakeFetch([
+      jsonResponse({ errors: [{ code: 200, message: 'bad params' }] }, { status: 400 }),
+    ]);
+    const client = createClient({
+      cookies: COOKIES,
+      transaction: transactionSpy().fn,
+      fetchImpl: fetchImpl.fn,
+      sleep: sleepSpy().fn,
+    });
+
+    const result = await client.post('FavoriteTweet', BODY);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected failure');
+    expect(result.error.code).toBe('BAD_REQUEST');
+    expect(result.error.status).toBe(400);
+  });
+
+  test('200 body carrying a 336 feature-drift error → FEATURE_DRIFT naming the op', async () => {
+    const fetchImpl = fakeFetch([
+      jsonResponse({ errors: [{ code: 336, message: 'features cannot be null' }] }),
+    ]);
+    const client = createClient({
+      cookies: COOKIES,
+      transaction: transactionSpy().fn,
+      fetchImpl: fetchImpl.fn,
+      sleep: sleepSpy().fn,
+    });
+
+    const result = await client.post('CreateTweet', mutationBody('CreateTweet', {}, true));
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected failure');
+    expect(result.error.code).toBe('FEATURE_DRIFT');
+    expect(result.error.message).toContain('CreateTweet');
+  });
+
+  test('a thrown fetch (network) → FETCH_FAILED, never throws', async () => {
+    const fetchImpl = fakeFetch([new Error('ECONNRESET')]);
+    const client = createClient({
+      cookies: COOKIES,
+      transaction: transactionSpy().fn,
+      fetchImpl: fetchImpl.fn,
+      sleep: sleepSpy().fn,
+    });
+
+    const result = await client.post('FavoriteTweet', BODY);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected failure');
+    expect(result.error.code).toBe('FETCH_FAILED');
+    expect(result.error.message).toContain('ECONNRESET');
+  });
+
+  test('429 then 200 → retries with backoff, returns value', async () => {
+    const reset = Math.floor(Date.now() / 1000) + 1;
+    const fetchImpl = fakeFetch([
+      new Response('rate limited', {
+        status: 429,
+        headers: { 'x-rate-limit-reset': String(reset) },
+      }),
+      jsonResponse({ data: { ok: 1 } }),
+    ]);
+    const sleep = sleepSpy();
+    const client = createClient({
+      cookies: COOKIES,
+      transaction: transactionSpy().fn,
+      fetchImpl: fetchImpl.fn,
+      sleep: sleep.fn,
+    });
+
+    const result = await client.post('FavoriteTweet', BODY);
+
+    expect(result).toEqual({ ok: true, value: { data: { ok: 1 } } });
+    expect(sleep.calls.length).toBe(1);
   });
 });

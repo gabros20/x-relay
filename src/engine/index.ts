@@ -22,6 +22,7 @@ import { type ClientResult, type TransactionProvider, createClient } from './cli
 import { getCookies } from './cookies.ts';
 import {
   type BuiltRequest,
+  type MutationBody,
   type OpName,
   type SearchProduct,
   bookmarkFolderTimelineRequest,
@@ -32,6 +33,7 @@ import {
   homeTimelineRequest,
   likesRequest,
   listRequest,
+  mutationBody,
   searchRequest,
   tweetDetailRequest,
   tweetResultRequest,
@@ -58,6 +60,10 @@ import {
 import { ClientTransaction, handleXMigration } from './xctid/index.ts';
 
 const DEFAULT_LIMIT = 40;
+/** Settle delay applied after every mutation (write), mirroring twitter-cli's
+ * post-write pause — keeps a burst of writes under X's per-action rate limits.
+ * Injectable via deps.sleep so tests run instantly. */
+const WRITE_DELAY_MS = 500;
 /** `archive --full` pacing: base + jitter (ms) between pages — a single-account
  * rate-limit guard for long (~125-page) sweeps (ARCHIVE-PLAN §9.5#7). */
 const ARCHIVE_PAGE_DELAY_MIN_MS = 400;
@@ -80,12 +86,27 @@ export class EngineError extends Error {
 /** The transport surface the engine needs — satisfied by createClient, fakeable in tests. */
 export interface EngineClient {
   get(op: OpName, request: BuiltRequest): Promise<ClientResult>;
+  /**
+   * POST a GraphQL mutation. Optional so read-only fakes (which only implement
+   * get) stay valid; the engine's mutate() throws a clear error if a lane's
+   * client lacks post.
+   */
+  post?(op: OpName, body: MutationBody): Promise<ClientResult>;
 }
 
 export interface SearchOpts {
   product?: SearchProduct;
   limit?: number;
 }
+
+/** Options for the generic write primitive `mutate`. */
+export interface MutateOpts {
+  /** Attach the FEATURES blob to the POST body (CreateTweet and friends need it). */
+  withFeatures?: boolean;
+}
+
+/** A v1.1 friendships write: `create` = follow, `destroy` = unfollow. */
+export type FriendshipKind = 'create' | 'destroy';
 
 export interface UserTweetsOpts {
   replies?: boolean;
@@ -125,6 +146,40 @@ function idLte(a: string, b: string): boolean {
   } catch {
     return a.length === b.length ? a <= b : a.length < b.length;
   }
+}
+
+/** X mutation error codes that mean "this action was already performed" (idempotent no-op):
+ * 139 already-favorited, 327 already-retweeted, 405 already-bookmarked. */
+const ALREADY_DONE_CODES = new Set([139, 327, 405]);
+
+/** The first GraphQL error in a mutation response body, if the body carries an errors[]. */
+function firstWriteError(body: unknown): { code?: number; message?: string } | null {
+  if (body === null || typeof body !== 'object') return null;
+  const errors = (body as { errors?: unknown }).errors;
+  if (!Array.isArray(errors) || errors.length === 0) return null;
+  const first = errors[0];
+  if (first === null || typeof first !== 'object') return { message: String(first) };
+  const code = (first as { code?: unknown }).code;
+  const message = (first as { message?: unknown }).message;
+  const out: { code?: number; message?: string } = {};
+  if (typeof code === 'number') out.code = code;
+  if (typeof message === 'string') out.message = message;
+  return out;
+}
+
+/**
+ * Map a mutation response body's in-band GraphQL error to an EngineError, or null
+ * if the body is clean. X returns 200 with an `errors[]` for "already favorited /
+ * retweeted" duplicates — those become ALREADY_DONE; anything else WRITE_FAILED.
+ */
+function writeErrorFor(op: OpName, body: unknown): EngineError | null {
+  const err = firstWriteError(body);
+  if (err === null) return null;
+  const message = err.message ?? `write ${op} failed`;
+  const dup =
+    (err.code !== undefined && ALREADY_DONE_CODES.has(err.code)) ||
+    /already/i.test(err.message ?? '');
+  return new EngineError(dup ? 'ALREADY_DONE' : 'WRITE_FAILED', message);
 }
 
 export interface Engine {
@@ -245,6 +300,33 @@ export interface Engine {
    * Returns null if me() returns null (not logged in) or the profile lookup fails.
    */
   whoami(): Promise<UserProfile | null>;
+  /**
+   * Generic GraphQL write primitive (plumbing for the T8–T10 write commands —
+   * post / like / retweet / bookmark / delete). POSTs the mutation via
+   * client.post (which carries the x-csrf-token from the ct0 cookie), applies the
+   * injectable write-delay, and returns the parsed response `data`.
+   *
+   * Throws EngineError on transport failure (codes mirror the read path:
+   * AUTH_FAILED, RATE_LIMITED, FEATURE_DRIFT, …). A 200 response whose body
+   * carries an "already performed" / duplicate error (e.g. already-favorited,
+   * already-retweeted) is mapped to code `ALREADY_DONE`; other in-body GraphQL
+   * errors are mapped to `WRITE_FAILED`.
+   *
+   * @param op          The write op (CreateTweet, FavoriteTweet, …).
+   * @param variables   The mutation variables.
+   * @param opts        `withFeatures: true` to attach the FEATURES blob.
+   */
+  mutate(op: OpName, variables: Record<string, unknown>, opts?: MutateOpts): Promise<unknown>;
+  /**
+   * v1.1 REST follow/unfollow primitive (plumbing for the T9/T10 follow commands).
+   * POSTs the form-encoded friendships endpoint (`create` = follow, `destroy` =
+   * unfollow) with the x-csrf-token header, applies the write-delay, and returns
+   * the parsed JSON. Throws EngineError on a non-ok response.
+   *
+   * @param kind    'create' to follow, 'destroy' to unfollow.
+   * @param userId  The target user's numeric id.
+   */
+  friendshipAction(kind: FriendshipKind, userId: string): Promise<unknown>;
 }
 
 export interface EngineDeps {
@@ -528,6 +610,94 @@ export function createEngine(deps: EngineDeps): Engine {
     throw new EngineError(lastError.code, lastError.message, lastError.status);
   }
 
+  // One lane's POST attempt; same stale-txid NOT_FOUND refresh/retry as callLane.
+  async function postLane(
+    lane: Lane,
+    op: OpName,
+    body: MutationBody,
+    attempt = 0,
+  ): Promise<ClientResult> {
+    if (lane.client.post === undefined) {
+      return {
+        ok: false,
+        error: {
+          code: 'WRITE_FAILED',
+          message: 'client has no post() — writes unsupported on this lane',
+        },
+      };
+    }
+    const res = await lane.client.post(op, body);
+    if (res.ok) return res;
+    if (res.error.code === 'NOT_FOUND' && attempt < MAX_NOTFOUND_RETRIES) {
+      await txn.refresh();
+      await sleep(RETRY_BACKOFF_MS * (attempt + 1));
+      return postLane(lane, op, body, attempt + 1);
+    }
+    return res;
+  }
+
+  // POST a mutation through the current lane, failing over on exhaustion exactly
+  // like the read `call`. Returns the raw parsed value (the engine maps it).
+  async function callPost(op: OpName, body: MutationBody): Promise<unknown> {
+    let lastError: { code: string; message: string; status?: number } = {
+      code: 'WRITE_FAILED',
+      message: 'no lanes available',
+    };
+    for (let laneTry = 0; laneTry < lanes.length; laneTry++) {
+      const res = await postLane(activeLane(), op, body);
+      if (res.ok) return res.value;
+      lastError = res.error;
+      if (!ROTATE_CODES.has(res.error.code)) break;
+      current = (current + 1) % lanes.length;
+    }
+    throw new EngineError(lastError.code, lastError.message, lastError.status);
+  }
+
+  // The generic write primitive (plumbing for T8–T10). POSTs the mutation, maps
+  // in-band "already done"/error bodies, applies the write-delay, returns data.
+  async function mutate(
+    op: OpName,
+    variables: Record<string, unknown>,
+    opts?: MutateOpts,
+  ): Promise<unknown> {
+    const body = mutationBody(op, variables, opts?.withFeatures === true);
+    const value = await callPost(op, body);
+    const writeErr = writeErrorFor(op, value);
+    // Settle delay AFTER the request regardless of outcome, so retries from a
+    // caller don't hammer X back-to-back.
+    await sleep(WRITE_DELAY_MS);
+    if (writeErr !== null) throw writeErr;
+    return (value as { data?: unknown })?.data ?? value;
+  }
+
+  // v1.1 REST follow/unfollow. Mirrors the trends() direct-REST pattern: build the
+  // headers via buildHeaders (which sets x-csrf-token from ct0) + a txid, but POST
+  // a form-encoded body with the friendships content-type.
+  async function friendshipAction(kind: FriendshipKind, userId: string): Promise<unknown> {
+    const path = `/i/api/1.1/friendships/${kind}.json`;
+    const lane = activeLane();
+    const txid = await txn.provider('POST', path);
+    const headers = {
+      ...buildHeaders({ cookies: lane.cookies, transactionId: txid }),
+      'content-type': 'application/x-www-form-urlencoded',
+    };
+    const form = new URLSearchParams({
+      user_id: userId,
+      include_profile_interstitial_type: '1',
+    }).toString();
+    const res = await lane.fetchImpl(`https://x.com${path}`, {
+      method: 'POST',
+      headers,
+      body: form,
+    });
+    await sleep(WRITE_DELAY_MS);
+    if (!res.ok) {
+      const code = res.status === 401 || res.status === 403 ? 'AUTH_FAILED' : 'WRITE_FAILED';
+      throw new EngineError(code, `friendships/${kind} failed (${res.status})`, res.status);
+    }
+    return res.json();
+  }
+
   // The authenticated user's @handle, via the v1.1 settings endpoint. Memoized.
   let mePromise: Promise<string | null> | undefined;
   async function fetchMe(): Promise<string | null> {
@@ -589,6 +759,8 @@ export function createEngine(deps: EngineDeps): Engine {
 
   return {
     me,
+    mutate,
+    friendshipAction,
 
     async search(query, opts) {
       const product: SearchProduct = opts?.product ?? 'Top';
