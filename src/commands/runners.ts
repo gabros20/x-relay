@@ -669,6 +669,54 @@ export function runArchive(
   }
 }
 
+// ── write: post / reply / quote ──────────────────────────────────────────────
+
+/** Result returned by the post / reply / quote runners. */
+export interface PostResult {
+  id: string;
+  url: string;
+}
+
+/**
+ * Post a new tweet.
+ * `text` must be non-empty — runners never post blank content automatically.
+ */
+export function runPost(engine: Engine, text: string): Promise<Envelope<PostResult>> {
+  if (!text || !text.trim())
+    return Promise.resolve(err('post', 'INVALID_INPUT', 'tweet text must not be empty'));
+  return guard('post', () => engine.post(text));
+}
+
+/**
+ * Reply to an existing tweet.
+ * Both `tweetId` and `text` must be present.
+ */
+export function runReply(
+  engine: Engine,
+  tweetId: string,
+  text: string,
+): Promise<Envelope<PostResult>> {
+  if (!tweetId) return Promise.resolve(err('reply', 'INVALID_INPUT', 'missing tweet id/url'));
+  if (!text || !text.trim())
+    return Promise.resolve(err('reply', 'INVALID_INPUT', 'reply text must not be empty'));
+  return guard('reply', () => engine.post(text, { replyToId: tweetId }));
+}
+
+/**
+ * Quote-tweet an existing tweet.
+ * Both `tweetId` and `text` must be present.
+ */
+export function runQuote(
+  engine: Engine,
+  tweetId: string,
+  text: string,
+): Promise<Envelope<PostResult>> {
+  if (!tweetId) return Promise.resolve(err('quote', 'INVALID_INPUT', 'missing tweet id/url'));
+  if (!text || !text.trim())
+    return Promise.resolve(err('quote', 'INVALID_INPUT', 'quote text must not be empty'));
+  return guard('quote', () => engine.post(text, { quoteTweetId: tweetId }));
+}
+
 // ── sync ────────────────────────────────────────────────────────────────────
 
 export interface SyncCommandOpts {

@@ -1497,3 +1497,122 @@ describe('friendshipAction (v1.1 REST write)', () => {
     await expect(engine.friendshipAction('create', '1')).rejects.toThrow(EngineError);
   });
 });
+
+// ── engine.post() (CreateTweet write) ────────────────────────────────────────
+
+describe('engine.post (CreateTweet)', () => {
+  /** A fake write-capable client that records the posted body and returns a
+   * synthetic CreateTweet response with the given rest_id. */
+  function postClientFor(restId: string, log: Array<{ op: string; body: MutationBody }>) {
+    const value = {
+      data: {
+        create_tweet: {
+          tweet_results: {
+            result: { rest_id: restId },
+          },
+        },
+      },
+    };
+    return {
+      get: async () => ({ ok: true as const, value: {} }),
+      post: async (op: OpName, body: MutationBody) => {
+        log.push({ op, body });
+        return { ok: true as const, value };
+      },
+    };
+  }
+
+  test('plain post: builds correct CreateTweet variables and returns {id, url}', async () => {
+    const log: Array<{ op: string; body: MutationBody }> = [];
+    const client = postClientFor('111222333', log);
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+
+    const result = await engine.post('Hello world!');
+
+    expect(result.id).toBe('111222333');
+    expect(result.url).toBe('https://x.com/i/web/status/111222333');
+    expect(log).toHaveLength(1);
+    expect(log[0]?.op).toBe('CreateTweet');
+    // Must include FEATURES blob (withFeatures: true)
+    expect(log[0]?.body.features).toBeDefined();
+    const vars = log[0]?.body.variables as Record<string, unknown>;
+    expect(vars.tweet_text).toBe('Hello world!');
+    expect(vars.media).toEqual({ media_entities: [], possibly_sensitive: false });
+    expect(vars.semantic_annotation_ids).toEqual([]);
+    expect(vars.dark_request).toBe(false);
+    // No reply or attachment_url for a plain post
+    expect(vars.reply).toBeUndefined();
+    expect(vars.attachment_url).toBeUndefined();
+  });
+
+  test('reply: adds reply variable with in_reply_to_tweet_id', async () => {
+    const log: Array<{ op: string; body: MutationBody }> = [];
+    const client = postClientFor('444555666', log);
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+
+    const result = await engine.post('Nice thread!', { replyToId: '99988877' });
+
+    expect(result.id).toBe('444555666');
+    const vars = log[0]?.body.variables as Record<string, unknown>;
+    expect(vars.reply).toEqual({
+      in_reply_to_tweet_id: '99988877',
+      exclude_reply_user_ids: [],
+    });
+    expect(vars.attachment_url).toBeUndefined();
+  });
+
+  test('quote: adds attachment_url with quoted tweet URL', async () => {
+    const log: Array<{ op: string; body: MutationBody }> = [];
+    const client = postClientFor('777888999', log);
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+
+    const result = await engine.post('Interesting take', { quoteTweetId: '55544433' });
+
+    expect(result.id).toBe('777888999');
+    const vars = log[0]?.body.variables as Record<string, unknown>;
+    expect(vars.attachment_url).toBe('https://x.com/i/web/status/55544433');
+    expect(vars.reply).toBeUndefined();
+  });
+
+  test('reply takes precedence over quote when both opts are supplied', async () => {
+    const log: Array<{ op: string; body: MutationBody }> = [];
+    const client = postClientFor('111', log);
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+
+    await engine.post('Both opts', { replyToId: '10', quoteTweetId: '20' });
+
+    const vars = log[0]?.body.variables as Record<string, unknown>;
+    expect(vars.reply).toBeDefined();
+    expect(vars.attachment_url).toBeUndefined();
+  });
+
+  test('extracts id from the nested create_tweet.tweet_results.result.rest_id path', async () => {
+    const client = {
+      get: async () => ({ ok: true as const, value: {} }),
+      post: async (_op: OpName, _body: MutationBody) => ({
+        ok: true as const,
+        value: {
+          data: {
+            create_tweet: { tweet_results: { result: { rest_id: '9876543210' } } },
+          },
+        },
+      }),
+    };
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    const result = await engine.post('Extract id');
+    expect(result.id).toBe('9876543210');
+    expect(result.url).toBe('https://x.com/i/web/status/9876543210');
+  });
+
+  test('propagates EngineError when client.post fails', async () => {
+    const client = {
+      get: async () => ({ ok: true as const, value: {} }),
+      post: async (_op: OpName, _body: MutationBody) => ({
+        ok: false as const,
+        error: { code: 'WRITE_FAILED', message: 'server error' },
+      }),
+    };
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    await expect(engine.post('fail')).rejects.toMatchObject({ code: 'WRITE_FAILED' });
+  });
+});

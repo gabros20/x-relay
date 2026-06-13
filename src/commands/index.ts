@@ -24,6 +24,9 @@ export {
   runCommunityInfo,
   runArchive,
   runWhoami,
+  runPost,
+  runReply,
+  runQuote,
   type SearchCommandOpts,
   type UserPostsCommandOpts,
   type CacheViewOpts,
@@ -31,5 +34,6 @@ export {
   type SyncCommandOpts,
   type ArchiveCommandOpts,
   type ArchiveResult,
+  type PostResult,
 } from './runners.ts';
 export { buildSearchQuery, type SearchQueryFlags } from './query.ts';

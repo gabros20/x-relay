@@ -22,7 +22,10 @@ import {
   runList,
   runMedia,
   runMyPosts,
+  runPost,
+  runQuote,
   runQuoters,
+  runReply,
   runRetweeters,
   runSearch,
   runSync,
@@ -230,9 +233,9 @@ function buildSearchOpts(parsed: ParsedArgs): SearchCommandOpts {
 }
 
 /**
- * The simple target-based read endpoints (one id/handle + an optional limit).
- * Split out of dispatch() to keep each switch small. Returns null when the
- * command isn't one of these, so dispatch() can fall through to UNKNOWN_COMMAND.
+ * The simple target-based endpoints (one id/handle + optional limit, or write
+ * commands with a positional id and text). Split out of dispatch() to keep each
+ * switch small. Returns null when the command isn't one of these.
  */
 function dispatchReadOps(
   parsed: ParsedArgs,
@@ -274,6 +277,21 @@ function dispatchReadOps(
       return runCommunity(engine, target, limit);
     case 'community-info':
       return runCommunityInfo(engine, target);
+    // ── write commands ─────────────────────────────────────────────────────
+    case 'post':
+      return runPost(engine, parsed.positionals.join(' '));
+    case 'reply':
+      return runReply(
+        engine,
+        extractTweetId(target) ?? target,
+        parsed.positionals.slice(1).join(' '),
+      );
+    case 'quote':
+      return runQuote(
+        engine,
+        extractTweetId(target) ?? target,
+        parsed.positionals.slice(1).join(' '),
+      );
     default:
       return null;
   }

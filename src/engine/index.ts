@@ -318,6 +318,24 @@ export interface Engine {
    */
   mutate(op: OpName, variables: Record<string, unknown>, opts?: MutateOpts): Promise<unknown>;
   /**
+   * Create a tweet (post, reply, or quote).
+   *
+   * - Plain post: `engine.post('Hello world!')`
+   * - Reply: `engine.post('Nice thread!', { replyToId: '123456' })`
+   * - Quote: `engine.post('Interesting take', { quoteTweetId: '789012' })`
+   *
+   * Quote and reply are mutually exclusive in practice; when both are supplied,
+   * reply takes precedence (the `reply` variable is added and `attachment_url` is
+   * not set).
+   *
+   * @returns `{ id, url }` where `id` is the newly-created tweet's snowflake id
+   *   and `url` is its canonical `https://x.com/i/web/status/<id>` permalink.
+   */
+  post(
+    text: string,
+    opts?: { replyToId?: string; quoteTweetId?: string },
+  ): Promise<{ id: string; url: string }>;
+  /**
    * v1.1 REST follow/unfollow primitive (plumbing for the T9/T10 follow commands).
    * POSTs the form-encoded friendships endpoint (`create` = follow, `destroy` =
    * unfollow) with the x-csrf-token header, applies the write-delay, and returns
@@ -757,10 +775,43 @@ export function createEngine(deps: EngineDeps): Engine {
     );
   }
 
+  // Build a CreateTweet variables object per the twitter-cli spec.
+  // CreateTweet requires `withFeatures: true` — always passed by the post() caller.
+  async function postTweet(
+    text: string,
+    opts?: { replyToId?: string; quoteTweetId?: string },
+  ): Promise<{ id: string; url: string }> {
+    const variables: Record<string, unknown> = {
+      tweet_text: text,
+      media: { media_entities: [], possibly_sensitive: false },
+      semantic_annotation_ids: [],
+      dark_request: false,
+    };
+    if (opts?.replyToId) {
+      variables.reply = {
+        in_reply_to_tweet_id: opts.replyToId,
+        exclude_reply_user_ids: [],
+      };
+    } else if (opts?.quoteTweetId) {
+      variables.attachment_url = `https://x.com/i/web/status/${opts.quoteTweetId}`;
+    }
+    const data = await mutate('CreateTweet', variables, { withFeatures: true });
+    // X returns { create_tweet: { tweet_results: { result: { rest_id: '<id>' } } } }
+    const id: string =
+      (
+        data as {
+          create_tweet?: { tweet_results?: { result?: { rest_id?: string } } };
+        }
+      )?.create_tweet?.tweet_results?.result?.rest_id ?? '';
+    const url = `https://x.com/i/web/status/${id}`;
+    return { id, url };
+  }
+
   return {
     me,
     mutate,
     friendshipAction,
+    post: postTweet,
 
     async search(query, opts) {
       const product: SearchProduct = opts?.product ?? 'Top';

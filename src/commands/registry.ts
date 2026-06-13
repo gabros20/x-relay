@@ -172,6 +172,24 @@ export const COMMANDS: CommandDef[] = [
     summary: 'The authenticated user (handle + profile).  Alias: status.',
     usage: 'xrelay whoami',
   },
+  {
+    name: 'post',
+    cost: '1 call — write',
+    summary: 'Post a new tweet. Returns the created tweet id and URL.',
+    usage: 'xrelay post "<text>"',
+  },
+  {
+    name: 'reply',
+    cost: '1 call — write',
+    summary: 'Reply to an existing tweet. Returns the created reply id and URL.',
+    usage: 'xrelay reply <id|url> "<text>"',
+  },
+  {
+    name: 'quote',
+    cost: '1 call — write',
+    summary: 'Quote-tweet an existing tweet. Returns the created quote id and URL.',
+    usage: 'xrelay quote <id|url> "<text>"',
+  },
 ];
 
 export const commandNames: string[] = COMMANDS.map((c) => c.name);
