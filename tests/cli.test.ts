@@ -87,6 +87,18 @@ function fakeEngine(calls: string[]): Engine {
       calls.push('me');
       return 'me';
     },
+    async like(tweetId: string): Promise<void> {
+      calls.push(`like:${tweetId}`);
+    },
+    async unlike(tweetId: string): Promise<void> {
+      calls.push(`unlike:${tweetId}`);
+    },
+    async bookmark(tweetId: string): Promise<void> {
+      calls.push(`bookmark:${tweetId}`);
+    },
+    async unbookmark(tweetId: string): Promise<void> {
+      calls.push(`unbookmark:${tweetId}`);
+    },
   };
 }
 
@@ -196,5 +208,47 @@ describe('dispatch', () => {
     const env = await dispatch(parseArgs(['search']), fakeEngine(calls));
     expect(env.ok).toBe(false);
     expect(calls).toHaveLength(0);
+  });
+
+  test('like / unlike / bookmark / unbookmark dispatch to correct engine methods', async () => {
+    const calls: string[] = [];
+    const eng = fakeEngine(calls);
+    await dispatch(parseArgs(['like', '111222333']), eng);
+    await dispatch(parseArgs(['unlike', '444555666']), eng);
+    await dispatch(parseArgs(['bookmark', '777888999']), eng);
+    await dispatch(parseArgs(['unbookmark', '321654987']), eng);
+    expect(calls).toEqual([
+      'like:111222333',
+      'unlike:444555666',
+      'bookmark:777888999',
+      'unbookmark:321654987',
+    ]);
+  });
+
+  test('"bookmark" (singular write) does NOT route to "bookmarks" (plural read) handler', async () => {
+    const calls: string[] = [];
+    const eng = fakeEngine(calls);
+    // `bookmark <id>` should call engine.bookmark(), not engine.bookmarks()
+    await dispatch(parseArgs(['bookmark', '12345']), eng);
+    expect(calls).toEqual(['bookmark:12345']);
+    // None of the calls should be the bookmarks read handler
+    expect(calls.every((c) => !c.startsWith('bookmarks:'))).toBe(true);
+  });
+
+  test('"bookmarks" (plural read) still routes to the cache runner, not the write runner', async () => {
+    const calls: string[] = [];
+    const eng = fakeEngine(calls);
+    // `bookmarks --live` triggers the live read path, which calls engine.bookmarks()
+    await dispatch(parseArgs(['bookmarks', '--live']), eng);
+    expect(calls.some((c) => c.startsWith('bookmarks:'))).toBe(true);
+    // None of the calls should be the bookmark write handler
+    expect(calls.every((c) => c !== 'bookmark:undefined')).toBe(true);
+  });
+
+  test('bookmark extracts a tweet id from a status URL', async () => {
+    const calls: string[] = [];
+    const eng = fakeEngine(calls);
+    await dispatch(parseArgs(['bookmark', 'https://x.com/user/status/99988877']), eng);
+    expect(calls[0]).toBe('bookmark:99988877');
   });
 });

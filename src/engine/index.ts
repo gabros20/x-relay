@@ -318,6 +318,38 @@ export interface Engine {
    */
   mutate(op: OpName, variables: Record<string, unknown>, opts?: MutateOpts): Promise<unknown>;
   /**
+   * Like a tweet (FavoriteTweet mutation).
+   * Reversible — no confirmation required.
+   * Throws ALREADY_DONE (via mutate) when the tweet is already liked.
+   *
+   * @param tweetId  The snowflake id of the tweet to like.
+   */
+  like(tweetId: string): Promise<void>;
+  /**
+   * Unlike a tweet (UnfavoriteTweet mutation).
+   * Reversible — no confirmation required.
+   * Throws ALREADY_DONE (via mutate) when the tweet is not currently liked.
+   *
+   * @param tweetId  The snowflake id of the tweet to unlike.
+   */
+  unlike(tweetId: string): Promise<void>;
+  /**
+   * Bookmark a tweet (CreateBookmark mutation).
+   * Reversible — no confirmation required.
+   * Throws ALREADY_DONE (via mutate) when the tweet is already bookmarked.
+   *
+   * @param tweetId  The snowflake id of the tweet to bookmark.
+   */
+  bookmark(tweetId: string): Promise<void>;
+  /**
+   * Remove a bookmark (DeleteBookmark mutation).
+   * Reversible — no confirmation required.
+   * Throws ALREADY_DONE (via mutate) when the tweet is not currently bookmarked.
+   *
+   * @param tweetId  The snowflake id of the tweet to unbookmark.
+   */
+  unbookmark(tweetId: string): Promise<void>;
+  /**
    * Create a tweet (post, reply, or quote).
    *
    * - Plain post: `engine.post('Hello world!')`
@@ -813,6 +845,22 @@ export function createEngine(deps: EngineDeps): Engine {
     mutate,
     friendshipAction,
     post: postTweet,
+
+    async like(tweetId) {
+      await mutate('FavoriteTweet', { tweet_id: tweetId });
+    },
+
+    async unlike(tweetId) {
+      await mutate('UnfavoriteTweet', { tweet_id: tweetId, dark_request: false });
+    },
+
+    async bookmark(tweetId) {
+      await mutate('CreateBookmark', { tweet_id: tweetId });
+    },
+
+    async unbookmark(tweetId) {
+      await mutate('DeleteBookmark', { tweet_id: tweetId });
+    },
 
     async search(query, opts) {
       const product: SearchProduct = opts?.product ?? 'Top';

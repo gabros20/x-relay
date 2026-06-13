@@ -190,6 +190,31 @@ export const COMMANDS: CommandDef[] = [
     summary: 'Quote-tweet an existing tweet. Returns the created quote id and URL.',
     usage: 'xrelay quote <id|url> "<text>"',
   },
+  {
+    name: 'like',
+    cost: '1 call — write',
+    summary: 'Like a tweet. Reversible — unlike to undo.',
+    usage: 'xrelay like <id|url>',
+  },
+  {
+    name: 'unlike',
+    cost: '1 call — write',
+    summary: 'Unlike a previously liked tweet.',
+    usage: 'xrelay unlike <id|url>',
+  },
+  {
+    name: 'bookmark',
+    cost: '1 call — write',
+    summary:
+      'Bookmark a tweet (save it). To search saved bookmarks use `xrelay bookmarks` (plural).',
+    usage: 'xrelay bookmark <id|url>',
+  },
+  {
+    name: 'unbookmark',
+    cost: '1 call — write',
+    summary: 'Remove a bookmark.',
+    usage: 'xrelay unbookmark <id|url>',
+  },
 ];
 
 export const commandNames: string[] = COMMANDS.map((c) => c.name);

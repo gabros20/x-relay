@@ -27,6 +27,10 @@ export {
   runPost,
   runReply,
   runQuote,
+  runLike,
+  runUnlike,
+  runBookmarkAdd,
+  runUnbookmark,
   type SearchCommandOpts,
   type UserPostsCommandOpts,
   type CacheViewOpts,
@@ -35,5 +39,6 @@ export {
   type ArchiveCommandOpts,
   type ArchiveResult,
   type PostResult,
+  type ToggleResult,
 } from './runners.ts';
 export { buildSearchQuery, type SearchQueryFlags } from './query.ts';

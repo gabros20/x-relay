@@ -1,5 +1,14 @@
 import { describe, expect, test } from 'bun:test';
-import { requireConfirmation, runPost, runQuote, runReply } from '../src/commands/runners.ts';
+import {
+  requireConfirmation,
+  runBookmarkAdd,
+  runLike,
+  runPost,
+  runQuote,
+  runReply,
+  runUnbookmark,
+  runUnlike,
+} from '../src/commands/runners.ts';
 import type { Engine } from '../src/engine/index.ts';
 import { EngineError } from '../src/engine/index.ts';
 
@@ -142,5 +151,166 @@ describe('runQuote', () => {
     expect(env.data.id).toBe('111222333');
     expect(capturedOpts?.quoteTweetId).toBe('55544433');
     expect(capturedOpts?.replyToId).toBeUndefined();
+  });
+});
+
+// ── runLike / runUnlike / runBookmarkAdd / runUnbookmark ──────────────────────
+
+/** Builds a minimal Engine stub whose toggle methods delegate to spies. */
+function fakeToggleEngine(overrides: Partial<Engine>): Engine {
+  const base: Partial<Engine> = {
+    like: async () => {},
+    unlike: async () => {},
+    bookmark: async () => {},
+    unbookmark: async () => {},
+  };
+  return { ...base, ...overrides } as unknown as Engine;
+}
+
+describe('runLike', () => {
+  test('INVALID_INPUT on empty tweetId', async () => {
+    const engine = fakeToggleEngine({});
+    const env = await runLike(engine, '');
+    expect(env.ok).toBe(false);
+    if (env.ok) throw new Error('expected failure');
+    expect(env.error.code).toBe('INVALID_INPUT');
+  });
+
+  test('happy path: calls engine.like() and returns { tweetId, action: "liked" }', async () => {
+    let captured: string | undefined;
+    const engine = fakeToggleEngine({
+      like: async (id) => {
+        captured = id;
+      },
+    });
+    const env = await runLike(engine, '111222333');
+    expect(env.ok).toBe(true);
+    if (!env.ok) throw new Error('expected success');
+    expect(env.data.tweetId).toBe('111222333');
+    expect(env.data.action).toBe('liked');
+    expect(captured).toBe('111222333');
+  });
+
+  test('surfaces ALREADY_DONE as an error envelope when already liked', async () => {
+    const engine = fakeToggleEngine({
+      like: async () => {
+        throw new EngineError('ALREADY_DONE', 'already liked');
+      },
+    });
+    const env = await runLike(engine, '1');
+    expect(env.ok).toBe(false);
+    if (env.ok) throw new Error('expected failure');
+    expect(env.error.code).toBe('ALREADY_DONE');
+  });
+});
+
+describe('runUnlike', () => {
+  test('INVALID_INPUT on empty tweetId', async () => {
+    const engine = fakeToggleEngine({});
+    const env = await runUnlike(engine, '');
+    expect(env.ok).toBe(false);
+    if (env.ok) throw new Error('expected failure');
+    expect(env.error.code).toBe('INVALID_INPUT');
+  });
+
+  test('happy path: calls engine.unlike() and returns { tweetId, action: "unliked" }', async () => {
+    let captured: string | undefined;
+    const engine = fakeToggleEngine({
+      unlike: async (id) => {
+        captured = id;
+      },
+    });
+    const env = await runUnlike(engine, '444555666');
+    expect(env.ok).toBe(true);
+    if (!env.ok) throw new Error('expected success');
+    expect(env.data.tweetId).toBe('444555666');
+    expect(env.data.action).toBe('unliked');
+    expect(captured).toBe('444555666');
+  });
+
+  test('surfaces ALREADY_DONE as an error envelope', async () => {
+    const engine = fakeToggleEngine({
+      unlike: async () => {
+        throw new EngineError('ALREADY_DONE', 'not liked');
+      },
+    });
+    const env = await runUnlike(engine, '1');
+    expect(env.ok).toBe(false);
+    if (env.ok) throw new Error('expected failure');
+    expect(env.error.code).toBe('ALREADY_DONE');
+  });
+});
+
+describe('runBookmarkAdd', () => {
+  test('INVALID_INPUT on empty tweetId', async () => {
+    const engine = fakeToggleEngine({});
+    const env = await runBookmarkAdd(engine, '');
+    expect(env.ok).toBe(false);
+    if (env.ok) throw new Error('expected failure');
+    expect(env.error.code).toBe('INVALID_INPUT');
+  });
+
+  test('happy path: calls engine.bookmark() and returns { tweetId, action: "bookmarked" }', async () => {
+    let captured: string | undefined;
+    const engine = fakeToggleEngine({
+      bookmark: async (id) => {
+        captured = id;
+      },
+    });
+    const env = await runBookmarkAdd(engine, '777888999');
+    expect(env.ok).toBe(true);
+    if (!env.ok) throw new Error('expected success');
+    expect(env.data.tweetId).toBe('777888999');
+    expect(env.data.action).toBe('bookmarked');
+    expect(captured).toBe('777888999');
+  });
+
+  test('surfaces ALREADY_DONE as an error envelope when already bookmarked', async () => {
+    const engine = fakeToggleEngine({
+      bookmark: async () => {
+        throw new EngineError('ALREADY_DONE', 'already bookmarked');
+      },
+    });
+    const env = await runBookmarkAdd(engine, '1');
+    expect(env.ok).toBe(false);
+    if (env.ok) throw new Error('expected failure');
+    expect(env.error.code).toBe('ALREADY_DONE');
+  });
+});
+
+describe('runUnbookmark', () => {
+  test('INVALID_INPUT on empty tweetId', async () => {
+    const engine = fakeToggleEngine({});
+    const env = await runUnbookmark(engine, '');
+    expect(env.ok).toBe(false);
+    if (env.ok) throw new Error('expected failure');
+    expect(env.error.code).toBe('INVALID_INPUT');
+  });
+
+  test('happy path: calls engine.unbookmark() and returns { tweetId, action: "unbookmarked" }', async () => {
+    let captured: string | undefined;
+    const engine = fakeToggleEngine({
+      unbookmark: async (id) => {
+        captured = id;
+      },
+    });
+    const env = await runUnbookmark(engine, '321654987');
+    expect(env.ok).toBe(true);
+    if (!env.ok) throw new Error('expected success');
+    expect(env.data.tweetId).toBe('321654987');
+    expect(env.data.action).toBe('unbookmarked');
+    expect(captured).toBe('321654987');
+  });
+
+  test('surfaces ALREADY_DONE as an error envelope', async () => {
+    const engine = fakeToggleEngine({
+      unbookmark: async () => {
+        throw new EngineError('ALREADY_DONE', 'not bookmarked');
+      },
+    });
+    const env = await runUnbookmark(engine, '1');
+    expect(env.ok).toBe(false);
+    if (env.ok) throw new Error('expected failure');
+    expect(env.error.code).toBe('ALREADY_DONE');
   });
 });

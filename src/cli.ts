@@ -10,6 +10,7 @@ import {
   type SearchCommandOpts,
   runArchive,
   runArticle,
+  runBookmarkAdd,
   runBookmarkFolders,
   runBookmarks,
   runCommunity,
@@ -17,6 +18,7 @@ import {
   runFeed,
   runFollowers,
   runFollowing,
+  runLike,
   runLikers,
   runLikes,
   runList,
@@ -31,6 +33,8 @@ import {
   runSync,
   runThread,
   runTrends,
+  runUnbookmark,
+  runUnlike,
   runUser,
   runUserMedia,
   runUserPosts,
@@ -292,6 +296,14 @@ function dispatchReadOps(
         extractTweetId(target) ?? target,
         parsed.positionals.slice(1).join(' '),
       );
+    case 'like':
+      return runLike(engine, extractTweetId(target) ?? target);
+    case 'unlike':
+      return runUnlike(engine, extractTweetId(target) ?? target);
+    case 'bookmark':
+      return runBookmarkAdd(engine, extractTweetId(target) ?? target);
+    case 'unbookmark':
+      return runUnbookmark(engine, extractTweetId(target) ?? target);
     default:
       return null;
   }

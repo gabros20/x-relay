@@ -1617,3 +1617,97 @@ describe('engine.post (CreateTweet)', () => {
     await expect(engine.post('fail')).rejects.toMatchObject({ code: 'WRITE_FAILED' });
   });
 });
+
+// ── engine.like / unlike / bookmark / unbookmark ─────────────────────────────
+
+describe('engine.like / unlike / bookmark / unbookmark', () => {
+  /** A write-capable fake that records every post() call. */
+  function writeClient(
+    result: ClientResult,
+    log: Array<{ op: string; body: MutationBody }>,
+  ): EngineClient {
+    return {
+      get: async () => ({ ok: true as const, value: {} }),
+      post: async (op: OpName, body: MutationBody) => {
+        log.push({ op, body });
+        return result;
+      },
+    };
+  }
+
+  test('like sends FavoriteTweet with { tweet_id }', async () => {
+    const log: Array<{ op: string; body: MutationBody }> = [];
+    const client = writeClient({ ok: true, value: { data: {} } }, log);
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+
+    await engine.like('12345');
+
+    expect(log).toHaveLength(1);
+    expect(log[0]?.op).toBe('FavoriteTweet');
+    expect(log[0]?.body.variables).toEqual({ tweet_id: '12345' });
+    expect(log[0]?.body.features).toBeUndefined();
+  });
+
+  test('unlike sends UnfavoriteTweet with { tweet_id, dark_request: false }', async () => {
+    const log: Array<{ op: string; body: MutationBody }> = [];
+    const client = writeClient({ ok: true, value: { data: {} } }, log);
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+
+    await engine.unlike('12345');
+
+    expect(log).toHaveLength(1);
+    expect(log[0]?.op).toBe('UnfavoriteTweet');
+    expect(log[0]?.body.variables).toEqual({ tweet_id: '12345', dark_request: false });
+    expect(log[0]?.body.features).toBeUndefined();
+  });
+
+  test('bookmark sends CreateBookmark with { tweet_id }', async () => {
+    const log: Array<{ op: string; body: MutationBody }> = [];
+    const client = writeClient({ ok: true, value: { data: {} } }, log);
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+
+    await engine.bookmark('99988877');
+
+    expect(log).toHaveLength(1);
+    expect(log[0]?.op).toBe('CreateBookmark');
+    expect(log[0]?.body.variables).toEqual({ tweet_id: '99988877' });
+    expect(log[0]?.body.features).toBeUndefined();
+  });
+
+  test('unbookmark sends DeleteBookmark with { tweet_id }', async () => {
+    const log: Array<{ op: string; body: MutationBody }> = [];
+    const client = writeClient({ ok: true, value: { data: {} } }, log);
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+
+    await engine.unbookmark('99988877');
+
+    expect(log).toHaveLength(1);
+    expect(log[0]?.op).toBe('DeleteBookmark');
+    expect(log[0]?.body.variables).toEqual({ tweet_id: '99988877' });
+    expect(log[0]?.body.features).toBeUndefined();
+  });
+
+  test('like throws ALREADY_DONE when the tweet is already liked (code 139)', async () => {
+    const client = writeClient(
+      {
+        ok: true,
+        value: { errors: [{ code: 139, message: 'You have already favorited this Tweet.' }] },
+      },
+      [],
+    );
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    await expect(engine.like('1')).rejects.toMatchObject({ code: 'ALREADY_DONE' });
+  });
+
+  test('bookmark throws ALREADY_DONE when the tweet is already bookmarked (code 405)', async () => {
+    const client = writeClient(
+      {
+        ok: true,
+        value: { errors: [{ code: 405, message: 'already bookmarked' }] },
+      },
+      [],
+    );
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    await expect(engine.bookmark('1')).rejects.toMatchObject({ code: 'ALREADY_DONE' });
+  });
+});

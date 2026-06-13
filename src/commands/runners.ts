@@ -717,6 +717,67 @@ export function runQuote(
   return guard('quote', () => engine.post(text, { quoteTweetId: tweetId }));
 }
 
+// ── write: like / unlike / bookmark / unbookmark ────────────────────────────
+
+/** Result returned by the like / unlike / bookmark / unbookmark runners. */
+export interface ToggleResult {
+  tweetId: string;
+  action: 'liked' | 'unliked' | 'bookmarked' | 'unbookmarked';
+}
+
+/**
+ * Like a tweet.
+ * Returns INVALID_INPUT when `tweetId` is empty.
+ * ALREADY_DONE from the engine surfaces as an error envelope via guard().
+ */
+export function runLike(engine: Engine, tweetId: string): Promise<Envelope<ToggleResult>> {
+  if (!tweetId) return Promise.resolve(err('like', 'INVALID_INPUT', 'missing tweet id'));
+  return guard('like', async () => {
+    await engine.like(tweetId);
+    return { tweetId, action: 'liked' as const };
+  });
+}
+
+/**
+ * Unlike a tweet.
+ * Returns INVALID_INPUT when `tweetId` is empty.
+ * ALREADY_DONE from the engine surfaces as an error envelope via guard().
+ */
+export function runUnlike(engine: Engine, tweetId: string): Promise<Envelope<ToggleResult>> {
+  if (!tweetId) return Promise.resolve(err('unlike', 'INVALID_INPUT', 'missing tweet id'));
+  return guard('unlike', async () => {
+    await engine.unlike(tweetId);
+    return { tweetId, action: 'unliked' as const };
+  });
+}
+
+/**
+ * Bookmark a tweet.
+ * Returns INVALID_INPUT when `tweetId` is empty.
+ * ALREADY_DONE from the engine surfaces as an error envelope via guard().
+ * Note: this is the write operation — the read/cache command is `runBookmarks` (plural).
+ */
+export function runBookmarkAdd(engine: Engine, tweetId: string): Promise<Envelope<ToggleResult>> {
+  if (!tweetId) return Promise.resolve(err('bookmark', 'INVALID_INPUT', 'missing tweet id'));
+  return guard('bookmark', async () => {
+    await engine.bookmark(tweetId);
+    return { tweetId, action: 'bookmarked' as const };
+  });
+}
+
+/**
+ * Remove a bookmark.
+ * Returns INVALID_INPUT when `tweetId` is empty.
+ * ALREADY_DONE from the engine surfaces as an error envelope via guard().
+ */
+export function runUnbookmark(engine: Engine, tweetId: string): Promise<Envelope<ToggleResult>> {
+  if (!tweetId) return Promise.resolve(err('unbookmark', 'INVALID_INPUT', 'missing tweet id'));
+  return guard('unbookmark', async () => {
+    await engine.unbookmark(tweetId);
+    return { tweetId, action: 'unbookmarked' as const };
+  });
+}
+
 // ── sync ────────────────────────────────────────────────────────────────────
 
 export interface SyncCommandOpts {
