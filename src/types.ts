@@ -196,6 +196,12 @@ export interface ArchiveTweet {
   article?: ArticleBrief;
 }
 
+/** A bookmark folder (list of folders or per-folder timeline). */
+export interface BookmarkFolder {
+  id: string;
+  name: string;
+}
+
 /** The top-level JSON envelope for an xrelay archive file. */
 export interface ArchiveFile {
   schema: 'x-relay/archive@1';
@@ -211,6 +217,8 @@ export interface ArchiveFile {
   handle?: string;
   /** For list archives: the list id. */
   listId?: string;
+  /** For bookmark folder archives: the folder id. */
+  folderId?: string;
   /** Archived tweets, in source order (newest first). */
   tweets: ArchiveTweet[];
 }

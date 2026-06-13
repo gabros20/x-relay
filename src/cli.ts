@@ -10,6 +10,7 @@ import {
   type SearchCommandOpts,
   runArchive,
   runArticle,
+  runBookmarkFolders,
   runBookmarks,
   runCommunity,
   runCommunityInfo,
@@ -57,6 +58,7 @@ const VALUE_FLAGS = new Set([
   'woeid',
   'out',
   'type',
+  'folder',
 ]);
 const BOOL_FLAGS = new Set([
   'replies',
@@ -175,6 +177,8 @@ function buildArchiveOpts(parsed: ParsedArgs): ArchiveCommandOpts {
     ...parseSearchFlags(parsed),
     // list-target field
     ...(listId !== undefined ? { listId } : {}),
+    // bookmarks --folder target field
+    ...(first(parsed, 'folder') ? { folderId: first(parsed, 'folder') } : {}),
     // feed-target field
     ...(following ? { following: true } : {}),
   };
@@ -293,8 +297,14 @@ export async function dispatch(parsed: ParsedArgs, engine: Engine): Promise<Enve
       });
     case 'thread':
       return runThread(engine, extractTweetId(target) ?? target);
-    case 'bookmarks':
+    case 'bookmarks': {
+      // `bookmarks folders [<id>]` → bookmark folder list or folder timeline
+      if (target === 'folders') {
+        const folderId = parsed.positionals[1];
+        return runBookmarkFolders(engine, folderId, num(parsed, 'limit'));
+      }
       return runBookmarks(engine, buildCacheOpts(parsed));
+    }
     case 'my-posts':
       return runMyPosts(engine, {
         ...buildCacheOpts(parsed),

@@ -1231,3 +1231,138 @@ describe('archiveBookmarks', () => {
     expect(results.map((t) => t.id)).toEqual(['10', '9', '8']);
   });
 });
+
+// ── helpers for bookmark folder tests ────────────────────────────────────────
+
+function folderSlice(folders: Array<{ id: string; name: string }>, nextCursor?: string): unknown {
+  const slice_info: Record<string, unknown> = {};
+  if (nextCursor !== undefined) slice_info.next_cursor = nextCursor;
+  return {
+    data: {
+      viewer: {
+        user_results: {
+          result: {
+            bookmark_collections_slice: {
+              items: folders,
+              slice_info,
+            },
+          },
+        },
+      },
+    },
+  };
+}
+
+// ── bookmarkFolders ───────────────────────────────────────────────────────────
+
+describe('bookmarkFolders', () => {
+  test('returns a flat list of folders from a single-page response', async () => {
+    const client = fakeClient({
+      _start: folderSlice([
+        { id: 'f1', name: 'AI Papers' },
+        { id: 'f2', name: 'Dev Tools' },
+      ]),
+    });
+    const engine = createEngine({ cookies, client });
+    const folders = await engine.bookmarkFolders();
+    expect(folders).toEqual([
+      { id: 'f1', name: 'AI Papers' },
+      { id: 'f2', name: 'Dev Tools' },
+    ]);
+  });
+
+  test('paginates across multiple pages via slice_info.next_cursor', async () => {
+    const client = fakeClient({
+      _start: folderSlice([{ id: 'f1', name: 'Folder A' }], 'cursor-page2'),
+      'cursor-page2': folderSlice([{ id: 'f2', name: 'Folder B' }]),
+    });
+    const engine = createEngine({ cookies, client });
+    const folders = await engine.bookmarkFolders();
+    expect(folders.map((f) => f.id)).toEqual(['f1', 'f2']);
+  });
+
+  test('returns [] when the response has no bookmark_collections_slice', async () => {
+    const client = fakeClient({ _start: { data: {} } });
+    const engine = createEngine({ cookies, client });
+    const folders = await engine.bookmarkFolders();
+    expect(folders).toEqual([]);
+  });
+
+  test('stops paginating when next_cursor is absent (last page)', async () => {
+    const client = fakeClient({
+      _start: folderSlice([{ id: 'f1', name: 'Solo' }]),
+    });
+    const engine = createEngine({ cookies, client });
+    const folders = await engine.bookmarkFolders();
+    expect(folders).toHaveLength(1);
+  });
+});
+
+// ── folderTimeline ────────────────────────────────────────────────────────────
+
+describe('folderTimeline', () => {
+  test('returns a TweetPage from the bookmark folder timeline', async () => {
+    const client = fakeClient({ _start: timeline(['10', '9', '8']) });
+    const engine = createEngine({ cookies, client });
+    const page = await engine.folderTimeline('folder-abc');
+    expect(page.tweets.map((t) => t.id)).toEqual(['10', '9', '8']);
+  });
+
+  test('respects limit option', async () => {
+    const client = fakeClient({
+      _start: timeline(['10', '9', '8', '7', '6'], 'c1'),
+      c1: timeline(['5', '4', '3']),
+    });
+    const engine = createEngine({ cookies, client });
+    const page = await engine.folderTimeline('folder-abc', { limit: 2 });
+    expect(page.tweets).toHaveLength(2);
+    expect(page.tweets.map((t) => t.id)).toEqual(['10', '9']);
+  });
+
+  test('uses BookmarkFolderTimeline op', async () => {
+    const loggedOps: string[] = [];
+    const baseClient = fakeClient({ _start: timeline(['1']) });
+    const client: EngineClient = {
+      get: async (op, req) => {
+        loggedOps.push(op);
+        return baseClient.get(op, req);
+      },
+    };
+    const engine = createEngine({ cookies, client });
+    await engine.folderTimeline('folder-xyz');
+    expect(loggedOps).toContain('BookmarkFolderTimeline');
+  });
+});
+
+// ── archiveBookmarkFolder ────────────────────────────────────────────────────
+
+describe('archiveBookmarkFolder', () => {
+  test('returns ArchiveTweet[] from the folder timeline (rich parse)', async () => {
+    const client = fakeClient({ _start: richBookmarkPage(['10', '9', '8']) });
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    const results = await engine.archiveBookmarkFolder('folder-abc');
+    expect(results.map((t) => t.id)).toEqual(['10', '9', '8']);
+  });
+
+  test('incremental run: membership-stop triggers after consecutive known ids', async () => {
+    const client = fakeClient({
+      _start: richBookmarkPage(['10', '9', '8'], 'c1'),
+      c1: richBookmarkPage(['7', '6', '5']),
+    });
+    const knownIds = new Set(['7', '6', '5']);
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    const results = await engine.archiveBookmarkFolder('folder-abc', { knownIds });
+    expect(results.map((t) => t.id)).toEqual(['10', '9', '8']);
+  });
+
+  test('full mode collects all tweets ignoring knownIds', async () => {
+    const client = fakeClient({
+      _start: richBookmarkPage(['10', '9', '8'], 'c1'),
+      c1: richBookmarkPage(['7', '6', '5']),
+    });
+    const knownIds = new Set(['10', '9', '8', '7', '6', '5']);
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    const results = await engine.archiveBookmarkFolder('folder-abc', { knownIds, full: true });
+    expect(results.map((t) => t.id)).toEqual(['10', '9', '8', '7', '6', '5']);
+  });
+});

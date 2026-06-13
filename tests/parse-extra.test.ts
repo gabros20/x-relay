@@ -2,11 +2,123 @@ import { describe, expect, test } from 'bun:test';
 import {
   extractTweetMedia,
   parseArticle,
+  parseBookmarkFolders,
   parseCommunity,
   parseTrends,
   parseUserTimeline,
   renderArticleFromResult,
 } from '../src/engine/parse-extra.ts';
+
+// ── parseBookmarkFolders ─────────────────────────────────────────────────────
+
+function bookmarkFolderSliceJson(
+  folders: Array<{ id: string; name: string }>,
+  nextCursor?: string,
+) {
+  const slice_info: Record<string, unknown> = {};
+  if (nextCursor !== undefined) slice_info.next_cursor = nextCursor;
+  return {
+    data: {
+      viewer: {
+        user_results: {
+          result: {
+            bookmark_collections_slice: {
+              items: folders,
+              slice_info,
+            },
+          },
+        },
+      },
+    },
+  };
+}
+
+describe('parseBookmarkFolders', () => {
+  test('extracts [{id, name}] from a standard slice response', () => {
+    const json = bookmarkFolderSliceJson([
+      { id: 'f1', name: 'AI Papers' },
+      { id: 'f2', name: 'Dev Tools' },
+    ]);
+    const folders = parseBookmarkFolders(json);
+    expect(folders).toEqual([
+      { id: 'f1', name: 'AI Papers' },
+      { id: 'f2', name: 'Dev Tools' },
+    ]);
+  });
+
+  test('returns [] when bookmark_collections_slice is absent', () => {
+    expect(parseBookmarkFolders({ data: {} })).toEqual([]);
+  });
+
+  test('returns [] when items array is absent', () => {
+    const json = {
+      data: {
+        viewer: {
+          user_results: {
+            result: {
+              bookmark_collections_slice: { slice_info: {} },
+            },
+          },
+        },
+      },
+    };
+    expect(parseBookmarkFolders(json)).toEqual([]);
+  });
+
+  test('returns [] when items is an empty array', () => {
+    expect(parseBookmarkFolders(bookmarkFolderSliceJson([]))).toEqual([]);
+  });
+
+  test('skips items that are missing id or name', () => {
+    const json = {
+      data: {
+        viewer: {
+          user_results: {
+            result: {
+              bookmark_collections_slice: {
+                items: [
+                  { id: 'f1', name: 'Good' },
+                  { name: 'No id here' }, // missing id → skipped
+                  { id: 'f3' }, // missing name → skipped
+                  { id: 'f4', name: 'Also Good' },
+                ],
+                slice_info: {},
+              },
+            },
+          },
+        },
+      },
+    };
+    const folders = parseBookmarkFolders(json);
+    expect(folders).toEqual([
+      { id: 'f1', name: 'Good' },
+      { id: 'f4', name: 'Also Good' },
+    ]);
+  });
+
+  test('is layout-drift tolerant — works when slice is nested deeper', () => {
+    // findDict crawls the tree, so a deeper nesting should still work
+    const json = {
+      some: {
+        deeply: {
+          nested: {
+            bookmark_collections_slice: {
+              items: [{ id: 'deep1', name: 'Deep Folder' }],
+              slice_info: {},
+            },
+          },
+        },
+      },
+    };
+    expect(parseBookmarkFolders(json)).toEqual([{ id: 'deep1', name: 'Deep Folder' }]);
+  });
+
+  test('returns [] for null / non-object input', () => {
+    expect(parseBookmarkFolders(null)).toEqual([]);
+    expect(parseBookmarkFolders('string')).toEqual([]);
+    expect(parseBookmarkFolders(42)).toEqual([]);
+  });
+});
 
 // ── parseUserTimeline ────────────────────────────────────────────────────────
 

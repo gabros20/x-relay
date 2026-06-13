@@ -6,6 +6,7 @@ import { toArchiveTweet } from '../archive.ts';
 import type {
   ArchiveTweet,
   Article,
+  BookmarkFolder,
   Community,
   MediaItem,
   SearchResult,
@@ -23,6 +24,8 @@ import {
   type BuiltRequest,
   type OpName,
   type SearchProduct,
+  bookmarkFolderTimelineRequest,
+  bookmarkFoldersRequest,
   bookmarksRequest,
   communityRequest,
   communityTweetsRequest,
@@ -40,6 +43,7 @@ import {
 import {
   extractTweetMedia,
   parseArticle,
+  parseBookmarkFolders,
   parseCommunity,
   parseUserTimeline,
 } from './parse-extra.ts';
@@ -218,6 +222,22 @@ export interface Engine {
    * `limit` to cap how many tweets are collected.
    */
   archiveFeed(opts?: ArchiveOpts & { following?: boolean }): Promise<ArchiveTweet[]>;
+  /**
+   * List the authenticated user's bookmark folders.
+   * Paginates BookmarkFoldersSlice (max 10 pages, same as twitter-cli).
+   */
+  bookmarkFolders(): Promise<BookmarkFolder[]>;
+  /**
+   * Fetch the tweets in a bookmark folder (slim research view) as a TweetPage.
+   * Paginates BookmarkFolderTimeline up to opts.limit tweets.
+   */
+  folderTimeline(folderId: string, opts?: PageOpts): Promise<TweetPage>;
+  /**
+   * Fetch tweets in a bookmark folder at full fidelity as ArchiveTweet[].
+   * Folder timelines are bookmark-ordered (like the main bookmarks list), so the
+   * default incremental membership-stop applies — same as archiveBookmarks.
+   */
+  archiveBookmarkFolder(folderId: string, opts?: ArchiveOpts): Promise<ArchiveTweet[]>;
   /** The authenticated user's own @handle (from the session), or null. Memoized. */
   me(): Promise<string | null>;
   /**
@@ -834,6 +854,68 @@ export function createEngine(deps: EngineDeps): Engine {
       const handle = await me();
       if (!handle) return null;
       return getUser(handle);
+    },
+
+    async bookmarkFolders() {
+      const folders: BookmarkFolder[] = [];
+      let cursor: string | undefined;
+      const MAX_PAGES = 10;
+
+      for (let page = 0; page < MAX_PAGES; page++) {
+        const value = await call('BookmarkFoldersSlice', bookmarkFoldersRequest({ cursor }));
+        const batch = parseBookmarkFolders(value);
+        folders.push(...batch);
+
+        // Advance cursor via slice_info.next_cursor (layout-drift safe via findDict).
+        // findDict returns the bookmark_collections_slice object; its slice_info.next_cursor
+        // is the pagination token (mirrors twitter-cli fetch_bookmark_folders).
+        const sliceWrapper = findDict(value, 'bookmark_collections_slice', true)[0];
+        const sliceInfo =
+          sliceWrapper !== null && typeof sliceWrapper === 'object' && !Array.isArray(sliceWrapper)
+            ? (sliceWrapper as Record<string, unknown>).slice_info
+            : undefined;
+        const nextCursor =
+          sliceInfo !== null &&
+          typeof sliceInfo === 'object' &&
+          !Array.isArray(sliceInfo) &&
+          typeof (sliceInfo as Record<string, unknown>).next_cursor === 'string'
+            ? ((sliceInfo as Record<string, unknown>).next_cursor as string)
+            : undefined;
+
+        if (!nextCursor || nextCursor === cursor) break;
+        cursor = nextCursor;
+      }
+
+      return folders;
+    },
+
+    async folderTimeline(folderId, opts) {
+      const limit = opts?.limit ?? DEFAULT_LIMIT;
+      return paginate(
+        async (cursor) => {
+          const value = await call(
+            'BookmarkFolderTimeline',
+            bookmarkFolderTimelineRequest({ folderId, cursor }),
+          );
+          return parseTimeline(value);
+        },
+        limit,
+        opts?.stopAtId,
+      );
+    },
+
+    archiveBookmarkFolder(folderId, opts) {
+      return archiveTimeline(
+        async (cursor) => {
+          const value = await call(
+            'BookmarkFolderTimeline',
+            bookmarkFolderTimelineRequest({ folderId, count: 40, cursor }),
+          );
+          return parseTimeline(value, { rich: true });
+        },
+        opts ?? {},
+        sleep,
+      );
     },
   };
 

@@ -43,7 +43,9 @@ export const COMMANDS: CommandDef[] = [
     summary: 'Search your saved posts in the local cache. --sync to refresh, --live to hit X.',
     usage:
       'xrelay bookmarks [-q "<query>"] [--limit N] [--sort relevance|newest|likes|views|bookmarks]\n' +
-      '       [--sync] [--repair] [--live]',
+      '       [--sync] [--repair] [--live]\n' +
+      '       xrelay bookmarks folders               # list your bookmark folders\n' +
+      '       xrelay bookmarks folders <folder-id>   # tweets in a bookmark folder',
   },
   {
     name: 'my-posts',
@@ -149,6 +151,7 @@ export const COMMANDS: CommandDef[] = [
     summary: 'Full-fidelity capture of bookmarks or a user timeline to a rich JSON archive.',
     usage:
       'xrelay archive bookmarks [--out <file.json>] [--limit N] [--full] [--prune] [--stdout] [--since YYYY-MM-DD]\n' +
+      '       xrelay archive bookmarks --folder <folder-id> [--out <file.json>] [--limit N] [--full] [--prune] [--stdout] [--since YYYY-MM-DD]\n' +
       '       xrelay archive user <handle> [--replies] [--out <file.json>] [--limit N] [--full] [--prune] [--stdout] [--since YYYY-MM-DD]\n' +
       '       xrelay archive my-posts [--replies] [--out <file.json>] [--limit N] [--full] [--prune] [--stdout] [--since YYYY-MM-DD]\n' +
       '       xrelay archive search "<query>" [--product Top|Latest|Media|People] [--from <h>] [--since YYYY-MM-DD]\n' +
@@ -160,7 +163,8 @@ export const COMMANDS: CommandDef[] = [
       '       Note: --since YYYY-MM-DD is a client-side post-filter (keeps tweets >= 00:00:00 UTC on that date).\n' +
       '             For search, --since also folds into the server-side query operator.\n' +
       '             For likes, omitting <handle> archives YOUR likes (own-likes only since June 2024).\n' +
-      '             For feed, --following uses the chronological following timeline; default is the algorithmic for-you feed.',
+      '             For feed, --following uses the chronological following timeline; default is the algorithmic for-you feed.\n' +
+      '             For bookmarks --folder, archives tweets from a specific bookmark folder.',
   },
   {
     name: 'whoami',

@@ -2,6 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import {
   FEATURES,
   OPS,
+  bookmarkFolderTimelineRequest,
+  bookmarkFoldersRequest,
   bookmarksRequest,
   communityRequest,
   communityTweetsRequest,
@@ -323,6 +325,89 @@ describe('homeTimelineRequest', () => {
     expect(
       (features as Record<string, unknown>).responsive_web_graphql_timeline_navigation_enabled,
     ).toBe(FEATURES.responsive_web_graphql_timeline_navigation_enabled);
+  });
+});
+
+describe('bookmarkFoldersRequest', () => {
+  test('BookmarkFoldersSlice op is present in OPS with the twitter-cli queryId', () => {
+    expect(OPS.BookmarkFoldersSlice.queryId).toBe('i78YDd0Tza-dV4SYs58kRg');
+    expect(OPS.BookmarkFoldersSlice.operationName).toBe('BookmarkFoldersSlice');
+  });
+
+  test('graphqlUrl for BookmarkFoldersSlice builds the correct URL', () => {
+    expect(graphqlUrl('BookmarkFoldersSlice')).toBe(
+      'https://x.com/i/api/graphql/i78YDd0Tza-dV4SYs58kRg/BookmarkFoldersSlice',
+    );
+  });
+
+  test('minimal variables when no cursor provided — empty variables object', () => {
+    const { variables } = bookmarkFoldersRequest({});
+    expect(variables).toEqual({});
+  });
+
+  test('passes cursor when provided', () => {
+    const { variables } = bookmarkFoldersRequest({ cursor: 'CUR' });
+    expect((variables as Record<string, unknown>).cursor).toBe('CUR');
+  });
+
+  test('includes graphql_timeline_v2_bookmark_timeline:true feature flag', () => {
+    const { features } = bookmarkFoldersRequest({});
+    expect((features as Record<string, unknown>).graphql_timeline_v2_bookmark_timeline).toBe(true);
+  });
+
+  test('has no fieldToggles', () => {
+    const req = bookmarkFoldersRequest({});
+    expect(req.fieldToggles).toBeUndefined();
+  });
+});
+
+describe('bookmarkFolderTimelineRequest', () => {
+  test('BookmarkFolderTimeline op is present in OPS with the twitter-cli queryId', () => {
+    expect(OPS.BookmarkFolderTimeline.queryId).toBe('hNY7X2xE2N7HVF6Qb_mu6w');
+    expect(OPS.BookmarkFolderTimeline.operationName).toBe('BookmarkFolderTimeline');
+  });
+
+  test('graphqlUrl for BookmarkFolderTimeline builds the correct URL', () => {
+    expect(graphqlUrl('BookmarkFolderTimeline')).toBe(
+      'https://x.com/i/api/graphql/hNY7X2xE2N7HVF6Qb_mu6w/BookmarkFolderTimeline',
+    );
+  });
+
+  test('encodes bookmark_collection_id, count (default 20), and includePromotedContent', () => {
+    const { variables } = bookmarkFolderTimelineRequest({ folderId: 'folder-123' });
+    const v = variables as Record<string, unknown>;
+    expect(v.bookmark_collection_id).toBe('folder-123');
+    expect(v.count).toBe(20);
+    expect(v.includePromotedContent).toBe(true);
+  });
+
+  test('passes count and cursor overrides', () => {
+    const { variables } = bookmarkFolderTimelineRequest({
+      folderId: 'f1',
+      count: 40,
+      cursor: 'CUR',
+    });
+    const v = variables as Record<string, unknown>;
+    expect(v.count).toBe(40);
+    expect(v.cursor).toBe('CUR');
+  });
+
+  test('includes graphql_timeline_v2_bookmark_timeline:true feature flag', () => {
+    const { features } = bookmarkFolderTimelineRequest({ folderId: 'f1' });
+    expect((features as Record<string, unknown>).graphql_timeline_v2_bookmark_timeline).toBe(true);
+  });
+
+  test('kv overrides variables', () => {
+    const { variables } = bookmarkFolderTimelineRequest({
+      folderId: 'f1',
+      kv: { count: 99 },
+    });
+    expect((variables as Record<string, unknown>).count).toBe(99);
+  });
+
+  test('omits cursor when not provided', () => {
+    const { variables } = bookmarkFolderTimelineRequest({ folderId: 'f1' });
+    expect((variables as Record<string, unknown>).cursor).toBeUndefined();
   });
 });
 

@@ -21,6 +21,7 @@ import { parseTwitterDateMs } from '../time.ts';
 import type {
   ArchiveFile,
   ArchiveTweet,
+  BookmarkFolder,
   Envelope,
   MediaItem,
   SearchResult,
@@ -280,6 +281,25 @@ export function runBookmarks(
   });
 }
 
+/**
+ * Run the bookmarks folders command.
+ * Without folderId: returns the folder list as `{ folders: BookmarkFolder[] }`.
+ * With folderId: returns the folder's tweet timeline as a TweetPage.
+ */
+export function runBookmarkFolders(
+  engine: Engine,
+  folderId?: string,
+  limit?: number,
+): Promise<Envelope<{ folders: BookmarkFolder[] } | TweetPage>> {
+  if (folderId) {
+    return guard('bookmark-folders', () => engine.folderTimeline(folderId, lim(limit)));
+  }
+  return guard('bookmark-folders', async () => {
+    const folders = await engine.bookmarkFolders();
+    return { folders };
+  });
+}
+
 export interface MyPostsOpts extends CacheViewOpts {
   handle?: string;
 }
@@ -349,6 +369,8 @@ export interface ArchiveCommandOpts extends Partial<SearchQueryFlags> {
   product?: SearchProduct;
   /** For list target: the Twitter List id to archive. */
   listId?: string;
+  /** For bookmarks target: when set, archive from this specific bookmark folder id. */
+  folderId?: string;
   /** For feed target: when true, fetch the following (chronological) timeline. */
   following?: boolean;
 }
@@ -457,6 +479,16 @@ function archiveFetchOpts(
 
 /** Run the bookmarks archive path and return an ArchiveResult. */
 function runArchiveBookmarks(engine: Engine, opts: ArchiveCommandOpts): Promise<ArchiveResult> {
+  const folderId = opts.folderId;
+  if (folderId) {
+    return runArchiveCore(opts, {
+      source: 'bookmarks',
+      patchFile: (file) => {
+        file.folderId = folderId;
+      },
+      fetch: (knownIds) => engine.archiveBookmarkFolder(folderId, archiveFetchOpts(opts, knownIds)),
+    });
+  }
   return runArchiveCore(opts, {
     source: 'bookmarks',
     fetch: (knownIds) => engine.archiveBookmarks(archiveFetchOpts(opts, knownIds)),

@@ -44,6 +44,14 @@ export const OPS = {
   Likes: { queryId: 'dv5-II7_Bup_PHish7p6fw', operationName: 'Likes' },
   HomeTimeline: { queryId: 'HCosKfLNW1AcOo3la3mMgg', operationName: 'HomeTimeline' },
   HomeLatestTimeline: { queryId: 'U0cdisy7QFIoTfu3-Okw0A', operationName: 'HomeLatestTimeline' },
+  BookmarkFoldersSlice: {
+    queryId: 'i78YDd0Tza-dV4SYs58kRg',
+    operationName: 'BookmarkFoldersSlice',
+  },
+  BookmarkFolderTimeline: {
+    queryId: 'hNY7X2xE2N7HVF6Qb_mu6w',
+    operationName: 'BookmarkFolderTimeline',
+  },
 } as const satisfies Record<string, { queryId: string; operationName: string }>;
 
 export type OpName = keyof typeof OPS;
@@ -455,6 +463,51 @@ export function homeTimelineRequest(params: HomeTimelineParams): OpRequest {
     op,
     variables: { ...variables, ...kv },
     features: { ...FEATURES, ...ft },
+  };
+}
+
+// --- BookmarkFoldersSlice ---------------------------------------------------
+
+export interface BookmarkFoldersParams extends Overrides {
+  cursor?: string;
+}
+
+/**
+ * Fetches the paginated list of bookmark folders (BookmarkFoldersSlice).
+ * Mirrors twitter-cli fetch_bookmark_folders: minimal variables — only cursor
+ * when paginating — plus FEATURES and the bookmark timeline flag.
+ */
+export function bookmarkFoldersRequest(params: BookmarkFoldersParams): BuiltRequest {
+  const { cursor, kv, ft } = params;
+  const variables = withCursor({}, cursor);
+  return {
+    variables: { ...variables, ...kv },
+    features: { ...FEATURES, graphql_timeline_v2_bookmark_timeline: true, ...ft },
+  };
+}
+
+// --- BookmarkFolderTimeline -------------------------------------------------
+
+export interface BookmarkFolderTimelineParams extends Overrides {
+  folderId: string;
+  count?: number;
+  cursor?: string;
+}
+
+/**
+ * Fetches tweets from a bookmark folder timeline (BookmarkFolderTimeline).
+ * Mirrors twitter-cli fetch_bookmark_folder_timeline: bookmark_collection_id,
+ * count, includePromotedContent plus the bookmark timeline feature flag.
+ */
+export function bookmarkFolderTimelineRequest(params: BookmarkFolderTimelineParams): BuiltRequest {
+  const { folderId, count = 20, cursor, kv, ft } = params;
+  const variables = withCursor(
+    { bookmark_collection_id: folderId, count, includePromotedContent: true },
+    cursor,
+  );
+  return {
+    variables: { ...variables, ...kv },
+    features: { ...FEATURES, graphql_timeline_v2_bookmark_timeline: true, ...ft },
   };
 }
 

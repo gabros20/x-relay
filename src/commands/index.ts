@@ -5,6 +5,7 @@ export {
   runUserPosts,
   runThread,
   runBookmarks,
+  runBookmarkFolders,
   runMyPosts,
   runSync,
   runList,

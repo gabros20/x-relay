@@ -2,11 +2,18 @@ import { describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runArchive, runFeed, runLikes, runWhoami } from '../src/commands/runners.ts';
+import {
+  runArchive,
+  runBookmarkFolders,
+  runFeed,
+  runLikes,
+  runWhoami,
+} from '../src/commands/runners.ts';
 import { type Engine, EngineError } from '../src/engine/index.ts';
 import type {
   ArchiveTweet,
   Article,
+  BookmarkFolder,
   Community,
   MediaItem,
   SearchResult,
@@ -53,6 +60,12 @@ interface FakeEngineOpts {
   likesTweets?: ArchiveTweet[];
   feedTweets?: ArchiveTweet[];
   feedPage?: TweetPage;
+  /** Canned bookmark folders list. */
+  folders?: BookmarkFolder[];
+  /** Canned folder timeline (slim TweetPage for folderTimeline). */
+  folderPage?: TweetPage;
+  /** Canned archive tweets for archiveBookmarkFolder. */
+  folderArchiveTweets?: ArchiveTweet[];
   /** Override me() return value (default: 'me'). */
   meHandle?: string | null;
   /** When set, archiveUserPosts throws this EngineError code. */
@@ -152,6 +165,15 @@ function fakeEngine(archiveTweetsOrOpts: ArchiveTweet[] | FakeEngineOpts): Engin
     },
     async archiveFeed(): Promise<ArchiveTweet[]> {
       return opts.feedTweets ?? [];
+    },
+    async bookmarkFolders(): Promise<BookmarkFolder[]> {
+      return opts.folders ?? [];
+    },
+    async folderTimeline(): Promise<TweetPage> {
+      return opts.folderPage ?? { tweets: [] };
+    },
+    async archiveBookmarkFolder(): Promise<ArchiveTweet[]> {
+      return opts.folderArchiveTweets ?? [];
     },
     async me(): Promise<string | null> {
       return opts.meHandle !== undefined ? opts.meHandle : 'me';
@@ -991,5 +1013,141 @@ describe('runWhoami', () => {
     if (env.ok) return;
     expect(env.error.code).toBe('NOT_FOUND');
     expect(env.error.message).toBe('not logged in');
+  });
+});
+
+// ── runBookmarkFolders ────────────────────────────────────────────────────────
+
+describe('runBookmarkFolders — list mode (no folderId)', () => {
+  test('returns { folders: [...] } envelope when folderId is absent', async () => {
+    const folders: BookmarkFolder[] = [
+      { id: 'f1', name: 'AI Papers' },
+      { id: 'f2', name: 'Dev Tools' },
+    ];
+    const engine = fakeEngine({ folders });
+
+    const env = await runBookmarkFolders(engine);
+
+    expect(env.ok).toBe(true);
+    if (!env.ok) return;
+    expect((env.data as { folders: BookmarkFolder[] }).folders).toEqual(folders);
+  });
+
+  test('returns empty folders array when engine returns []', async () => {
+    const engine = fakeEngine({ folders: [] });
+    const env = await runBookmarkFolders(engine);
+    expect(env.ok).toBe(true);
+    if (!env.ok) return;
+    expect((env.data as { folders: BookmarkFolder[] }).folders).toEqual([]);
+  });
+});
+
+describe('runBookmarkFolders — timeline mode (with folderId)', () => {
+  test('returns a TweetPage envelope when folderId is provided', async () => {
+    const folderPage: TweetPage = {
+      tweets: [
+        {
+          id: '100',
+          url: 'https://x.com/elonmusk/status/100',
+          text: 'Tweet 100',
+          author: makeAuthor(),
+          metrics: makeMetrics(),
+        },
+      ],
+    };
+    const engine = fakeEngine({ folderPage });
+
+    const env = await runBookmarkFolders(engine, 'folder-abc');
+
+    expect(env.ok).toBe(true);
+    if (!env.ok) return;
+    const page = env.data as TweetPage;
+    expect(page.tweets).toHaveLength(1);
+    expect(page.tweets[0]?.id).toBe('100');
+  });
+});
+
+// ── archive bookmarks --folder ────────────────────────────────────────────────
+
+describe('runArchive — bookmarks --folder target', () => {
+  test('archives folder tweets with source=bookmarks and stamps folderId on the file', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'xrelay-arc-folder-'));
+    const out = join(dir, 'archive.json');
+    const tweets = [makeArchiveTweet('300'), makeArchiveTweet('200')];
+    const engine = fakeEngine({ folderArchiveTweets: tweets });
+
+    const env = await runArchive(engine, {
+      target: 'bookmarks',
+      folderId: 'folder-abc',
+      out,
+    });
+
+    expect(env.ok).toBe(true);
+    if (!env.ok) return;
+    expect(env.data.source).toBe('bookmarks');
+    expect(env.data.added).toBe(2);
+    expect(env.data.total).toBe(2);
+
+    // Verify folderId is stamped on the archive file
+    const { loadArchive } = await import('../src/archive.ts');
+    const file = loadArchive(out);
+    expect(file?.source).toBe('bookmarks');
+    expect(file?.folderId).toBe('folder-abc');
+
+    rmSync(dir, { recursive: true });
+  });
+
+  test('incremental run for a folder: only newly seen tweets count as added', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'xrelay-arc-folder-'));
+    const out = join(dir, 'archive.json');
+
+    const { mergeArchive, saveArchive: save } = await import('../src/archive.ts');
+    const seed = mergeArchive(null, [makeArchiveTweet('200'), makeArchiveTweet('100')], {
+      generatedAt: '2026-01-01T00:00:00+00:00',
+    });
+    seed.file.source = 'bookmarks';
+    seed.file.folderId = 'folder-abc';
+    save(out, seed.file);
+
+    const engine = fakeEngine({
+      folderArchiveTweets: [makeArchiveTweet('300'), makeArchiveTweet('200')],
+    });
+
+    const env = await runArchive(engine, { target: 'bookmarks', folderId: 'folder-abc', out });
+
+    expect(env.ok).toBe(true);
+    if (!env.ok) return;
+    expect(env.data.added).toBe(1); // only 300 is new
+    expect(env.data.total).toBe(3); // 300 + 200 + 100
+
+    rmSync(dir, { recursive: true });
+  });
+
+  test('--stdout prints JSON with folderId stamped', async () => {
+    const engine = fakeEngine({ folderArchiveTweets: [makeArchiveTweet('500')] });
+
+    const chunks: string[] = [];
+    const origWrite = process.stdout.write.bind(process.stdout);
+    // @ts-ignore override for test
+    process.stdout.write = (chunk: string) => {
+      chunks.push(chunk);
+      return true;
+    };
+
+    const env = await runArchive(engine, {
+      target: 'bookmarks',
+      folderId: 'folder-xyz',
+      stdout: true,
+    });
+
+    // @ts-ignore restore
+    process.stdout.write = origWrite;
+
+    expect(env.ok).toBe(true);
+    if (!env.ok) return;
+    const json = JSON.parse(chunks.join(''));
+    expect(json.source).toBe('bookmarks');
+    expect(json.folderId).toBe('folder-xyz');
+    expect(json.tweets).toHaveLength(1);
   });
 });

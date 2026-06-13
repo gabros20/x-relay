@@ -7,6 +7,7 @@ import type {
   Article,
   ArticleBrief,
   Author,
+  BookmarkFolder,
   Community,
   MediaItem,
   Trend,
@@ -147,6 +148,30 @@ export function parseTrends(json: unknown): Trend[] {
     const node = isRecord(wrapper) ? wrapper.result : undefined;
     const trend = parseTrendResult(node);
     if (trend !== null) out.push(trend);
+  }
+  return out;
+}
+
+// ── Bookmark folders ─────────────────────────────────────────────────────────
+
+/**
+ * Extract bookmark folders from a BookmarkFoldersSlice response.
+ * Walks to bookmark_collections_slice.items[] via findDict for layout-drift
+ * tolerance. Each item must carry id and name strings. Returns [] when the
+ * slice is absent or empty.
+ */
+export function parseBookmarkFolders(json: unknown): BookmarkFolder[] {
+  const sliceWrapper = findDict(json, 'bookmark_collections_slice', true)[0];
+  if (!isRecord(sliceWrapper)) return [];
+  const items = sliceWrapper.items;
+  if (!Array.isArray(items)) return [];
+
+  const out: BookmarkFolder[] = [];
+  for (const item of items) {
+    if (!isRecord(item)) continue;
+    const id = asString(item.id);
+    const name = asString(item.name);
+    if (id !== undefined && name !== undefined) out.push({ id, name });
   }
   return out;
 }
