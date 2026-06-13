@@ -676,44 +676,93 @@ export interface PostResult {
   url: string;
 }
 
+/** Options shared by post / reply / quote that include optional image paths. */
+export interface PostOpts {
+  /** Local file paths for images to attach (up to 4). Uploaded via uploadMedia. */
+  imagePaths?: string[];
+}
+
+/**
+ * Upload each image path via engine.uploadMedia, capping at 4. Returns the
+ * collected media_id_string array. Throws EngineError INVALID_INPUT if more than
+ * 4 paths are provided; propagates MEDIA_UPLOAD_FAILED from the engine.
+ */
+async function uploadImages(engine: Engine, imagePaths: string[]): Promise<string[]> {
+  if (imagePaths.length > 4) {
+    throw new EngineError('INVALID_INPUT', 'at most 4 images can be attached to a tweet');
+  }
+  const mediaIds: string[] = [];
+  for (const p of imagePaths) {
+    mediaIds.push(await engine.uploadMedia(p));
+  }
+  return mediaIds;
+}
+
 /**
  * Post a new tweet.
  * `text` must be non-empty — runners never post blank content automatically.
+ * Optional `opts.imagePaths`: up to 4 local image paths to attach.
  */
-export function runPost(engine: Engine, text: string): Promise<Envelope<PostResult>> {
+export function runPost(
+  engine: Engine,
+  text: string,
+  opts: PostOpts = {},
+): Promise<Envelope<PostResult>> {
   if (!text || !text.trim())
     return Promise.resolve(err('post', 'INVALID_INPUT', 'tweet text must not be empty'));
-  return guard('post', () => engine.post(text));
+  return guard('post', async () => {
+    const mediaIds =
+      opts.imagePaths && opts.imagePaths.length > 0
+        ? await uploadImages(engine, opts.imagePaths)
+        : undefined;
+    return engine.post(text, mediaIds ? { mediaIds } : undefined);
+  });
 }
 
 /**
  * Reply to an existing tweet.
  * Both `tweetId` and `text` must be present.
+ * Optional `opts.imagePaths`: up to 4 local image paths to attach.
  */
 export function runReply(
   engine: Engine,
   tweetId: string,
   text: string,
+  opts: PostOpts = {},
 ): Promise<Envelope<PostResult>> {
   if (!tweetId) return Promise.resolve(err('reply', 'INVALID_INPUT', 'missing tweet id/url'));
   if (!text || !text.trim())
     return Promise.resolve(err('reply', 'INVALID_INPUT', 'reply text must not be empty'));
-  return guard('reply', () => engine.post(text, { replyToId: tweetId }));
+  return guard('reply', async () => {
+    const mediaIds =
+      opts.imagePaths && opts.imagePaths.length > 0
+        ? await uploadImages(engine, opts.imagePaths)
+        : undefined;
+    return engine.post(text, { replyToId: tweetId, ...(mediaIds ? { mediaIds } : {}) });
+  });
 }
 
 /**
  * Quote-tweet an existing tweet.
  * Both `tweetId` and `text` must be present.
+ * Optional `opts.imagePaths`: up to 4 local image paths to attach.
  */
 export function runQuote(
   engine: Engine,
   tweetId: string,
   text: string,
+  opts: PostOpts = {},
 ): Promise<Envelope<PostResult>> {
   if (!tweetId) return Promise.resolve(err('quote', 'INVALID_INPUT', 'missing tweet id/url'));
   if (!text || !text.trim())
     return Promise.resolve(err('quote', 'INVALID_INPUT', 'quote text must not be empty'));
-  return guard('quote', () => engine.post(text, { quoteTweetId: tweetId }));
+  return guard('quote', async () => {
+    const mediaIds =
+      opts.imagePaths && opts.imagePaths.length > 0
+        ? await uploadImages(engine, opts.imagePaths)
+        : undefined;
+    return engine.post(text, { quoteTweetId: tweetId, ...(mediaIds ? { mediaIds } : {}) });
+  });
 }
 
 // ── write: like / unlike / bookmark / unbookmark ────────────────────────────

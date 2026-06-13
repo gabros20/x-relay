@@ -72,6 +72,7 @@ const VALUE_FLAGS = new Set([
   'out',
   'type',
   'folder',
+  'image',
 ]);
 const BOOL_FLAGS = new Set([
   'replies',
@@ -85,7 +86,7 @@ const BOOL_FLAGS = new Set([
   'confirm',
 ]);
 /** Single-dash aliases. */
-const SHORT_FLAGS: Record<string, string> = { q: 'query' };
+const SHORT_FLAGS: Record<string, string> = { q: 'query', i: 'image' };
 
 /**
  * Command name aliases not in the COMMANDS registry.
@@ -298,20 +299,6 @@ function dispatchReadOps(
     case 'community-info':
       return runCommunityInfo(engine, target);
     // ── write commands ─────────────────────────────────────────────────────
-    case 'post':
-      return runPost(engine, parsed.positionals.join(' '));
-    case 'reply':
-      return runReply(
-        engine,
-        extractTweetId(target) ?? target,
-        parsed.positionals.slice(1).join(' '),
-      );
-    case 'quote':
-      return runQuote(
-        engine,
-        extractTweetId(target) ?? target,
-        parsed.positionals.slice(1).join(' '),
-      );
     case 'like':
       return runLike(engine, extractTweetId(target) ?? target);
     case 'unlike':
@@ -321,7 +308,45 @@ function dispatchReadOps(
     case 'unbookmark':
       return runUnbookmark(engine, extractTweetId(target) ?? target);
     default:
-      return dispatchWriteOps(parsed, engine, command, target);
+      return (
+        dispatchPostOps(parsed, engine, command, target) ??
+        dispatchWriteOps(parsed, engine, command, target)
+      );
+  }
+}
+
+/**
+ * Post / reply / quote commands, split from dispatchReadOps to keep cognitive
+ * complexity within biome's limit of 25. Supports optional --image/-i attachments.
+ * Returns null when the command isn't one of these.
+ */
+function dispatchPostOps(
+  parsed: ParsedArgs,
+  engine: Engine,
+  command: string | undefined,
+  target: string,
+): Promise<Envelope<unknown>> | null {
+  const imagePaths = parsed.flags.image;
+  const imageOpts = imagePaths ? { imagePaths } : {};
+  switch (command) {
+    case 'post':
+      return runPost(engine, parsed.positionals.join(' '), imageOpts);
+    case 'reply':
+      return runReply(
+        engine,
+        extractTweetId(target) ?? target,
+        parsed.positionals.slice(1).join(' '),
+        imageOpts,
+      );
+    case 'quote':
+      return runQuote(
+        engine,
+        extractTweetId(target) ?? target,
+        parsed.positionals.slice(1).join(' '),
+        imageOpts,
+      );
+    default:
+      return null;
   }
 }
 

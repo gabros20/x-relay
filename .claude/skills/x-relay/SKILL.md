@@ -221,10 +221,12 @@ All write commands return `{ ok, command, data }` on success; the `data` shape v
 
 ### Posting
 ```
-xrelay post "<text>"              # post a new tweet. Returns { id, url }
-xrelay reply <id|url> "<text>"    # reply to a tweet. Returns { id, url }
-xrelay quote <id|url> "<text>"    # quote-tweet. Returns { id, url }
+xrelay post "<text>" [-i <path>] ...           # post a new tweet. Returns { id, url }
+xrelay reply <id|url> "<text>" [-i <path>] ... # reply to a tweet. Returns { id, url }
+xrelay quote <id|url> "<text>" [-i <path>] ... # quote-tweet. Returns { id, url }
 ```
+- `-i`/`--image` attaches a local image file (JPEG, PNG, GIF, WebP). Repeat up to 4 times.
+  Each image is uploaded via the chunked media upload API before the tweet is created.
 
 ### Engagement toggles (reversible)
 ```

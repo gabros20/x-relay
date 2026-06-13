@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { toArchiveTweet } from '../archive.ts';
 // The Engine — the only network-facing surface. Wires the transaction-id
 // generator + auth headers + op config + request driver + parser into the
@@ -392,6 +393,15 @@ export interface Engine {
    */
   unfollow(handle: string): Promise<void>;
   /**
+   * Upload a local image file via the chunked media upload API and return its
+   * `media_id_string`. Supports JPEG, PNG, GIF, and WebP. Throws EngineError
+   * INVALID_INPUT for unsupported extensions and MEDIA_UPLOAD_FAILED on any
+   * network/API error during the INIT→APPEND→FINALIZE sequence.
+   *
+   * @param filePath  Absolute or relative path to the image file.
+   */
+  uploadMedia(filePath: string): Promise<string>;
+  /**
    * Create a tweet (post, reply, or quote).
    *
    * - Plain post: `engine.post('Hello world!')`
@@ -402,12 +412,13 @@ export interface Engine {
    * reply takes precedence (the `reply` variable is added and `attachment_url` is
    * not set).
    *
+   * @param mediaIds  Up to 4 media_id_string values from uploadMedia() to attach.
    * @returns `{ id, url }` where `id` is the newly-created tweet's snowflake id
    *   and `url` is its canonical `https://x.com/i/web/status/<id>` permalink.
    */
   post(
     text: string,
-    opts?: { replyToId?: string; quoteTweetId?: string },
+    opts?: { replyToId?: string; quoteTweetId?: string; mediaIds?: string[] },
   ): Promise<{ id: string; url: string }>;
   /**
    * v1.1 REST follow/unfollow primitive (plumbing for the T9/T10 follow commands).
@@ -849,15 +860,121 @@ export function createEngine(deps: EngineDeps): Engine {
     );
   }
 
+  /** Map of image file extensions to MIME types supported by the upload API. */
+  const MIME_MAP: Record<string, string> = {
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    png: 'image/png',
+    gif: 'image/gif',
+    webp: 'image/webp',
+  };
+
+  const UPLOAD_URL = 'https://upload.twitter.com/i/media/upload.json';
+
+  /**
+   * Upload a local image via the chunked media upload API (INIT→APPEND→FINALIZE).
+   * Single-segment upload (one APPEND with segment_index 0) — sufficient for images.
+   */
+  async function uploadMedia(filePath: string): Promise<string> {
+    // Guess MIME from extension.
+    const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
+    const mimeType = MIME_MAP[ext];
+    if (!mimeType) {
+      throw new EngineError(
+        'INVALID_INPUT',
+        `unsupported image extension: .${ext} (supported: jpg, jpeg, png, gif, webp)`,
+      );
+    }
+
+    const fileBytes = readFileSync(filePath);
+    const totalBytes = fileBytes.length;
+
+    const lane = activeLane();
+    const txid = await txn.provider('POST', '/i/media/upload.json');
+    // Build headers without content-type — we set it per-request below.
+    const baseHeaders = buildHeaders({ cookies: lane.cookies, transactionId: txid });
+    // Remove content-type so we can set it properly per request.
+    const { 'content-type': _ct, ...headersNoContentType } = baseHeaders;
+
+    // INIT — form-urlencoded fields.
+    const initForm = new URLSearchParams({
+      command: 'INIT',
+      total_bytes: String(totalBytes),
+      media_type: mimeType,
+    });
+    const initRes = await lane.fetchImpl(UPLOAD_URL, {
+      method: 'POST',
+      headers: { ...headersNoContentType, 'content-type': 'application/x-www-form-urlencoded' },
+      body: initForm.toString(),
+    });
+    if (!initRes.ok) {
+      await sleep(WRITE_DELAY_MS);
+      throw new EngineError(
+        'MEDIA_UPLOAD_FAILED',
+        `media INIT failed (${initRes.status})`,
+        initRes.status,
+      );
+    }
+    const initData = (await initRes.json()) as { media_id_string?: string };
+    const mediaId = initData.media_id_string;
+    if (!mediaId) {
+      await sleep(WRITE_DELAY_MS);
+      throw new EngineError('MEDIA_UPLOAD_FAILED', 'media INIT returned no media_id_string');
+    }
+
+    // APPEND — multipart/form-data with the binary blob.
+    const appendForm = new FormData();
+    appendForm.set('command', 'APPEND');
+    appendForm.set('media_id', mediaId);
+    appendForm.set('segment_index', '0');
+    appendForm.set('media', new Blob([fileBytes], { type: mimeType }));
+    // Bun's fetch sets the multipart content-type automatically when body is FormData.
+    const appendRes = await lane.fetchImpl(UPLOAD_URL, {
+      method: 'POST',
+      headers: headersNoContentType,
+      body: appendForm,
+    });
+    if (!appendRes.ok) {
+      await sleep(WRITE_DELAY_MS);
+      throw new EngineError(
+        'MEDIA_UPLOAD_FAILED',
+        `media APPEND failed (${appendRes.status})`,
+        appendRes.status,
+      );
+    }
+
+    // FINALIZE — form-urlencoded fields.
+    const finalizeForm = new URLSearchParams({ command: 'FINALIZE', media_id: mediaId });
+    const finalizeRes = await lane.fetchImpl(UPLOAD_URL, {
+      method: 'POST',
+      headers: { ...headersNoContentType, 'content-type': 'application/x-www-form-urlencoded' },
+      body: finalizeForm.toString(),
+    });
+    await sleep(WRITE_DELAY_MS);
+    if (!finalizeRes.ok) {
+      throw new EngineError(
+        'MEDIA_UPLOAD_FAILED',
+        `media FINALIZE failed (${finalizeRes.status})`,
+        finalizeRes.status,
+      );
+    }
+
+    return mediaId;
+  }
+
   // Build a CreateTweet variables object per the twitter-cli spec.
   // CreateTweet requires `withFeatures: true` — always passed by the post() caller.
   async function postTweet(
     text: string,
-    opts?: { replyToId?: string; quoteTweetId?: string },
+    opts?: { replyToId?: string; quoteTweetId?: string; mediaIds?: string[] },
   ): Promise<{ id: string; url: string }> {
+    const mediaEntities = (opts?.mediaIds ?? []).map((id) => ({
+      media_id: id,
+      tagged_users: [],
+    }));
     const variables: Record<string, unknown> = {
       tweet_text: text,
-      media: { media_entities: [], possibly_sensitive: false },
+      media: { media_entities: mediaEntities, possibly_sensitive: false },
       semantic_annotation_ids: [],
       dark_request: false,
     };
@@ -886,6 +1003,7 @@ export function createEngine(deps: EngineDeps): Engine {
     me,
     mutate,
     friendshipAction,
+    uploadMedia,
     post: postTweet,
 
     async like(tweetId) {

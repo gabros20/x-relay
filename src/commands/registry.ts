@@ -176,19 +176,19 @@ export const COMMANDS: CommandDef[] = [
     name: 'post',
     cost: '1 call — write',
     summary: 'Post a new tweet. Returns the created tweet id and URL.',
-    usage: 'xrelay post "<text>"',
+    usage: 'xrelay post "<text>" [-i <path>] [-i <path>] ...   # up to 4 images via --image/-i',
   },
   {
     name: 'reply',
     cost: '1 call — write',
     summary: 'Reply to an existing tweet. Returns the created reply id and URL.',
-    usage: 'xrelay reply <id|url> "<text>"',
+    usage: 'xrelay reply <id|url> "<text>" [-i <path>] ...   # up to 4 images via --image/-i',
   },
   {
     name: 'quote',
     cost: '1 call — write',
     summary: 'Quote-tweet an existing tweet. Returns the created quote id and URL.',
-    usage: 'xrelay quote <id|url> "<text>"',
+    usage: 'xrelay quote <id|url> "<text>" [-i <path>] ...   # up to 4 images via --image/-i',
   },
   {
     name: 'like',

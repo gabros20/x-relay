@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'bun:test';
+import { mkdtempSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Cookies } from '../src/engine/auth.ts';
 import type { ClientResult } from '../src/engine/client.ts';
 import { type EngineClient, EngineError, createEngine } from '../src/engine/index.ts';
@@ -1433,6 +1436,201 @@ describe('mutate (write plumbing)', () => {
     const engine = createEngine({ cookies, client, sleep: async () => {} });
     await engine.mutate('CreateTweet', { tweet_text: 'hi' }, { withFeatures: true });
     expect(log[0]?.body.features).toBeDefined();
+  });
+});
+
+// ── engine.uploadMedia ────────────────────────────────────────────────────────
+
+describe('engine.uploadMedia', () => {
+  /** Creates a temporary image file with dummy bytes. Returns { path, dir } for cleanup. */
+  function makeTmpFile(ext: string, content = 'fake-image-data'): { path: string; dir: string } {
+    const dir = mkdtempSync(join(tmpdir(), 'xrelay-test-'));
+    const path = join(dir, `test.${ext}`);
+    writeFileSync(path, Buffer.from(content));
+    return { path, dir };
+  }
+
+  /** Remove the temp file and its parent dir. */
+  function cleanup(path: string, dir: string): void {
+    try {
+      unlinkSync(path);
+    } catch {}
+    try {
+      rmdirSync(dir);
+    } catch {}
+  }
+
+  /**
+   * Build a fake fetchImpl that drives the INIT→APPEND→FINALIZE upload sequence.
+   * Records each call and returns the configured responses.
+   * - INIT: form-urlencoded with command=INIT → 200 with media_id_string.
+   * - APPEND: FormData body (binary) → 204 No Content.
+   * - FINALIZE: form-urlencoded with command=FINALIZE → 200 with media_id_string.
+   */
+  function makeUploadFetch(mediaId: string): {
+    fetchImpl: typeof fetch;
+    calls: Array<{ url: string; method?: string; headers?: Record<string, string> }>;
+  } {
+    const calls: Array<{
+      url: string;
+      method?: string;
+      headers?: Record<string, string>;
+    }> = [];
+    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = String(url);
+      calls.push({
+        url: urlStr,
+        method: init?.method,
+        headers: (init?.headers ?? {}) as Record<string, string>,
+      });
+      if (urlStr.includes('upload.twitter.com')) {
+        // APPEND sends FormData (not a string body).
+        if (init?.body instanceof FormData) {
+          return new Response(null, { status: 204 });
+        }
+        const bodyStr = typeof init?.body === 'string' ? init.body : '';
+        if (bodyStr.includes('command=INIT')) {
+          return new Response(JSON.stringify({ media_id_string: mediaId }), { status: 200 });
+        }
+        // FINALIZE
+        return new Response(JSON.stringify({ media_id_string: mediaId, processing_info: null }), {
+          status: 200,
+        });
+      }
+      return new Response('not found', { status: 404 });
+    }) as typeof fetch;
+    return { fetchImpl, calls };
+  }
+
+  test('runs INIT→APPEND→FINALIZE against upload.twitter.com and returns media_id_string', async () => {
+    const { path, dir } = makeTmpFile('png');
+    const mediaId = '1234567890';
+    const { fetchImpl, calls } = makeUploadFetch(mediaId);
+    const engine = createEngine({
+      cookies,
+      client: { get: async () => ({ ok: true as const, value: {} }) },
+      fetchImpl,
+      transaction: async () => 'fake-txid',
+      sleep: async () => {},
+    });
+
+    try {
+      const result = await engine.uploadMedia(path);
+      expect(result).toBe(mediaId);
+      // All three calls must go to the upload endpoint.
+      expect(calls.every((c) => c.url.includes('upload.twitter.com'))).toBe(true);
+      // Order: INIT, APPEND, FINALIZE.
+      expect(calls).toHaveLength(3);
+    } finally {
+      cleanup(path, dir);
+    }
+  });
+
+  test('INIT request carries x-csrf-token from cookies', async () => {
+    const { path, dir } = makeTmpFile('jpg');
+    const { fetchImpl, calls } = makeUploadFetch('9999');
+    const engine = createEngine({
+      cookies,
+      client: { get: async () => ({ ok: true as const, value: {} }) },
+      fetchImpl,
+      transaction: async () => 'fake-txid',
+      sleep: async () => {},
+    });
+
+    try {
+      await engine.uploadMedia(path);
+      const initCall = calls[0];
+      expect(initCall?.headers?.['x-csrf-token']).toBe(cookies.ct0);
+    } finally {
+      cleanup(path, dir);
+    }
+  });
+
+  test('throws INVALID_INPUT for unsupported extension', async () => {
+    const { path, dir } = makeTmpFile('bmp');
+    const { fetchImpl } = makeUploadFetch('1');
+    const engine = createEngine({
+      cookies,
+      client: { get: async () => ({ ok: true as const, value: {} }) },
+      fetchImpl,
+      transaction: async () => 'fake-txid',
+      sleep: async () => {},
+    });
+
+    try {
+      await expect(engine.uploadMedia(path)).rejects.toMatchObject({
+        code: 'INVALID_INPUT',
+      });
+    } finally {
+      cleanup(path, dir);
+    }
+  });
+
+  test('throws MEDIA_UPLOAD_FAILED when INIT returns non-ok', async () => {
+    const { path, dir } = makeTmpFile('png');
+    const failFetch = (async () => new Response('fail', { status: 500 })) as typeof fetch;
+    const engine = createEngine({
+      cookies,
+      client: { get: async () => ({ ok: true as const, value: {} }) },
+      fetchImpl: failFetch,
+      transaction: async () => 'fake-txid',
+      sleep: async () => {},
+    });
+
+    try {
+      await expect(engine.uploadMedia(path)).rejects.toMatchObject({
+        code: 'MEDIA_UPLOAD_FAILED',
+      });
+    } finally {
+      cleanup(path, dir);
+    }
+  });
+});
+
+// ── engine.post() with mediaIds ───────────────────────────────────────────────
+
+describe('engine.post with mediaIds', () => {
+  function postClientFor(restId: string, log: Array<{ op: string; body: MutationBody }>) {
+    const value = {
+      data: {
+        create_tweet: { tweet_results: { result: { rest_id: restId } } },
+      },
+    };
+    return {
+      get: async () => ({ ok: true as const, value: {} }),
+      post: async (op: OpName, body: MutationBody) => {
+        log.push({ op, body });
+        return { ok: true as const, value };
+      },
+    };
+  }
+
+  test('post with mediaIds populates media_entities in CreateTweet variables', async () => {
+    const log: Array<{ op: string; body: MutationBody }> = [];
+    const client = postClientFor('42', log);
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+
+    await engine.post('With images!', { mediaIds: ['111', '222'] });
+
+    const vars = log[0]?.body.variables as Record<string, unknown>;
+    expect(vars.media).toEqual({
+      media_entities: [
+        { media_id: '111', tagged_users: [] },
+        { media_id: '222', tagged_users: [] },
+      ],
+      possibly_sensitive: false,
+    });
+  });
+
+  test('post without mediaIds keeps media_entities empty', async () => {
+    const log: Array<{ op: string; body: MutationBody }> = [];
+    const client = postClientFor('43', log);
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+
+    await engine.post('No images');
+
+    const vars = log[0]?.body.variables as Record<string, unknown>;
+    expect(vars.media).toEqual({ media_entities: [], possibly_sensitive: false });
   });
 });
 

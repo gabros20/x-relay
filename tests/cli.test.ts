@@ -114,6 +114,23 @@ function fakeEngine(calls: string[]): Engine {
     async unfollow(handle: string): Promise<void> {
       calls.push(`unfollow:${handle}`);
     },
+    async uploadMedia(path: string): Promise<string> {
+      calls.push(`uploadMedia:${path}`);
+      return `media-id-${path}`;
+    },
+    async post(
+      text: string,
+      opts?: { replyToId?: string; quoteTweetId?: string; mediaIds?: string[] },
+    ): Promise<{ id: string; url: string }> {
+      calls.push(`post:${text}:mediaIds=${(opts?.mediaIds ?? []).join(',')}`);
+      return { id: 'fake-id', url: 'https://x.com/i/web/status/fake-id' };
+    },
+    async mutate(): Promise<unknown> {
+      return {};
+    },
+    async friendshipAction(): Promise<unknown> {
+      return {};
+    },
   };
 }
 
@@ -302,5 +319,43 @@ describe('dispatch', () => {
     await dispatch(parseArgs(['follow', 'jack']), eng);
     await dispatch(parseArgs(['unfollow', 'elonmusk']), eng);
     expect(calls).toEqual(['follow:jack', 'unfollow:elonmusk']);
+  });
+
+  test('post with single --image uploads the file and passes mediaId', async () => {
+    const calls: string[] = [];
+    const eng = fakeEngine(calls);
+    await dispatch(parseArgs(['post', 'Hello!', '--image', '/tmp/photo.jpg']), eng);
+    expect(calls).toContain('uploadMedia:/tmp/photo.jpg');
+    const postCall = calls.find((c) => c.startsWith('post:'));
+    expect(postCall).toContain('media-id-/tmp/photo.jpg');
+  });
+
+  test('post with repeated -i collects multiple image paths', async () => {
+    const calls: string[] = [];
+    const eng = fakeEngine(calls);
+    await dispatch(
+      parseArgs(['post', 'Multi!', '-i', '/a.jpg', '-i', '/b.png', '-i', '/c.gif']),
+      eng,
+    );
+    expect(calls).toContain('uploadMedia:/a.jpg');
+    expect(calls).toContain('uploadMedia:/b.png');
+    expect(calls).toContain('uploadMedia:/c.gif');
+  });
+});
+
+describe('parseArgs --image / -i', () => {
+  test('--image is collected as a repeatable flag', () => {
+    const p = parseArgs(['post', 'hello', '--image', '/a.jpg', '--image', '/b.png']);
+    expect(p.flags.image).toEqual(['/a.jpg', '/b.png']);
+  });
+
+  test('-i short alias is collected as image', () => {
+    const p = parseArgs(['post', 'hello', '-i', '/a.jpg', '-i', '/b.png']);
+    expect(p.flags.image).toEqual(['/a.jpg', '/b.png']);
+  });
+
+  test('mixed --image and -i are merged into one array', () => {
+    const p = parseArgs(['post', 'hello', '--image', '/a.jpg', '-i', '/b.png']);
+    expect(p.flags.image).toEqual(['/a.jpg', '/b.png']);
   });
 });

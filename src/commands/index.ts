@@ -44,6 +44,7 @@ export {
   type ArchiveCommandOpts,
   type ArchiveResult,
   type PostResult,
+  type PostOpts,
   type ToggleResult,
   type FollowResult,
 } from './runners.ts';

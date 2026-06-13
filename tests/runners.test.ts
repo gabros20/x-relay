@@ -17,6 +17,12 @@ import {
 import type { Engine } from '../src/engine/index.ts';
 import { EngineError } from '../src/engine/index.ts';
 
+// Re-export for type check
+type PostSpy2 = (
+  text: string,
+  opts?: { replyToId?: string; quoteTweetId?: string; mediaIds?: string[] },
+) => Promise<{ id: string; url: string }>;
+
 describe('requireConfirmation (destructive-write guard)', () => {
   test('blocks with a CONFIRMATION_REQUIRED envelope when not confirmed', () => {
     const block = requireConfirmation('delete-tweet', {}, 'permanently delete tweet 20');
@@ -544,5 +550,132 @@ describe('runUnfollow', () => {
     expect(env.ok).toBe(false);
     if (env.ok) throw new Error('expected failure');
     expect(env.error.code).toBe('NOT_FOUND');
+  });
+});
+
+// ── runPost / runReply / runQuote with imagePaths ─────────────────────────────
+
+/** Minimal Engine stub for image-attachment tests. */
+function fakePostEngineWithUpload(
+  uploadSpy: (path: string) => Promise<string>,
+  postSpy: PostSpy2,
+): Engine {
+  return {
+    uploadMedia: uploadSpy,
+    post: postSpy,
+  } as unknown as Engine;
+}
+
+describe('runPost with imagePaths', () => {
+  test('calls uploadMedia for each path and passes mediaIds to engine.post', async () => {
+    const uploadedPaths: string[] = [];
+    const receivedOpts: Array<{ mediaIds?: string[] } | undefined> = [];
+    const engine = fakePostEngineWithUpload(
+      async (p) => {
+        uploadedPaths.push(p);
+        return `media-${p}`;
+      },
+      async (_text, opts) => {
+        receivedOpts.push(opts as { mediaIds?: string[] } | undefined);
+        return { id: '1', url: 'u' };
+      },
+    );
+
+    const env = await runPost(engine, 'Hello with image!', {
+      imagePaths: ['/tmp/a.jpg', '/tmp/b.png'],
+    });
+
+    expect(env.ok).toBe(true);
+    expect(uploadedPaths).toEqual(['/tmp/a.jpg', '/tmp/b.png']);
+    expect(receivedOpts[0]?.mediaIds).toEqual(['media-/tmp/a.jpg', 'media-/tmp/b.png']);
+  });
+
+  test('rejects with INVALID_INPUT when more than 4 images are provided', async () => {
+    const engine = fakePostEngineWithUpload(
+      async (p) => `id-${p}`,
+      async () => ({ id: '1', url: 'u' }),
+    );
+
+    const env = await runPost(engine, 'Too many images!', {
+      imagePaths: ['/a.jpg', '/b.jpg', '/c.jpg', '/d.jpg', '/e.jpg'],
+    });
+
+    expect(env.ok).toBe(false);
+    if (env.ok) throw new Error('expected failure');
+    expect(env.error.code).toBe('INVALID_INPUT');
+  });
+
+  test('with no imagePaths calls engine.post without mediaIds', async () => {
+    let capturedOpts: { mediaIds?: string[] } | undefined;
+    const engine = fakePostEngineWithUpload(
+      async () => 'id',
+      async (_text, opts) => {
+        capturedOpts = opts as typeof capturedOpts;
+        return { id: '2', url: 'u' };
+      },
+    );
+
+    await runPost(engine, 'Plain tweet');
+    expect(capturedOpts).toBeUndefined();
+  });
+
+  test('surfaces MEDIA_UPLOAD_FAILED from uploadMedia as an error envelope', async () => {
+    const engine = fakePostEngineWithUpload(
+      async () => {
+        throw new EngineError('MEDIA_UPLOAD_FAILED', 'upload error');
+      },
+      async () => ({ id: '3', url: 'u' }),
+    );
+
+    const env = await runPost(engine, 'Will fail', { imagePaths: ['/x.jpg'] });
+    expect(env.ok).toBe(false);
+    if (env.ok) throw new Error('expected failure');
+    expect(env.error.code).toBe('MEDIA_UPLOAD_FAILED');
+  });
+});
+
+describe('runReply with imagePaths', () => {
+  test('calls uploadMedia and passes mediaIds with replyToId', async () => {
+    const uploadedPaths: string[] = [];
+    let capturedOpts: { replyToId?: string; mediaIds?: string[] } | undefined;
+    const engine = fakePostEngineWithUpload(
+      async (p) => {
+        uploadedPaths.push(p);
+        return `mid-${p}`;
+      },
+      async (_text, opts) => {
+        capturedOpts = opts as typeof capturedOpts;
+        return { id: '99', url: 'u' };
+      },
+    );
+
+    await runReply(engine, '12345', 'Reply with image!', { imagePaths: ['/img.png'] });
+
+    expect(uploadedPaths).toEqual(['/img.png']);
+    expect(capturedOpts?.replyToId).toBe('12345');
+    expect(capturedOpts?.mediaIds).toEqual(['mid-/img.png']);
+  });
+});
+
+describe('runQuote with imagePaths', () => {
+  test('calls uploadMedia and passes mediaIds with quoteTweetId', async () => {
+    const uploadedPaths: string[] = [];
+    let capturedOpts: { quoteTweetId?: string; mediaIds?: string[] } | undefined;
+    const engine = fakePostEngineWithUpload(
+      async (p) => {
+        uploadedPaths.push(p);
+        return `qid-${p}`;
+      },
+      async (_text, opts) => {
+        capturedOpts = opts as typeof capturedOpts;
+        return { id: '88', url: 'u' };
+      },
+    );
+
+    await runQuote(engine, '55544433', 'Quote with image!', { imagePaths: ['/q.webp'] });
+
+    expect(uploadedPaths).toEqual(['/q.webp']);
+    expect(capturedOpts?.quoteTweetId).toBe('55544433');
+    expect(capturedOpts?.mediaIds).toEqual(['qid-/q.webp']);
   });
 });
