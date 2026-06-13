@@ -131,6 +131,13 @@ export const COMMANDS: CommandDef[] = [
     usage: 'xrelay community-info <community-id>',
   },
   {
+    name: 'likes',
+    cost: 'medium',
+    summary:
+      "A user's liked tweets (own-likes only since June 2024 — X no longer exposes others' likes).",
+    usage: 'xrelay likes [<handle>] [--limit N]',
+  },
+  {
     name: 'archive',
     cost: 'medium — incremental',
     summary: 'Full-fidelity capture of bookmarks or a user timeline to a rich JSON archive.',
@@ -142,8 +149,10 @@ export const COMMANDS: CommandDef[] = [
       '              [--until YYYY-MM-DD] [--lang xx] [--min-faves N] [--min-retweets N] [--filter <v> ...]\n' +
       '              [--out <file.json>] [--limit N] [--stdout]\n' +
       '       xrelay archive list <list-id> [--out <file.json>] [--limit N] [--full] [--prune] [--stdout] [--since YYYY-MM-DD]\n' +
+      '       xrelay archive likes [<handle>] [--out <file.json>] [--limit N] [--full] [--prune] [--stdout] [--since YYYY-MM-DD]\n' +
       '       Note: --since YYYY-MM-DD is a client-side post-filter (keeps tweets >= 00:00:00 UTC on that date).\n' +
-      '             For search, --since also folds into the server-side query operator.',
+      '             For search, --since also folds into the server-side query operator.\n' +
+      '             For likes, omitting <handle> archives YOUR likes (own-likes only since June 2024).',
   },
   {
     name: 'whoami',

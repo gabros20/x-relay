@@ -16,6 +16,7 @@ import {
   runFollowers,
   runFollowing,
   runLikers,
+  runLikes,
   runList,
   runMedia,
   runMyPosts,
@@ -137,7 +138,8 @@ function parseSearchFlags(
 function buildArchiveOpts(parsed: ParsedArgs): ArchiveCommandOpts {
   const target = parsed.positionals[0] ?? '';
   // For `archive user <handle>`, positionals[1] is the handle.
-  const rawHandle = target === 'user' ? (parsed.positionals[1] ?? '') : '';
+  // For `archive likes [<handle>]`, positionals[1] is the optional handle.
+  const rawHandle = target === 'user' || target === 'likes' ? (parsed.positionals[1] ?? '') : '';
   const archiveHandle = rawHandle ? (extractHandle(rawHandle) ?? rawHandle) : undefined;
   // For `archive search "<query>"`, positionals[1] is the query string.
   const searchQuery = target === 'search' ? (parsed.positionals[1] ?? '') : undefined;
@@ -231,6 +233,11 @@ function dispatchReadOps(
       return runRetweeters(engine, extractTweetId(target) ?? target, limit);
     case 'likers':
       return runLikers(engine, extractTweetId(target) ?? target, limit);
+    case 'likes': {
+      // Handle is optional — runner falls back to the authenticated user when omitted.
+      const likesHandle = target ? (extractHandle(target) ?? target) : undefined;
+      return runLikes(engine, likesHandle, limit);
+    }
     case 'quoters':
       return runQuoters(engine, extractTweetId(target) ?? target, limit);
     case 'trends':

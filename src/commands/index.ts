@@ -13,6 +13,7 @@ export {
   runFollowing,
   runRetweeters,
   runLikers,
+  runLikes,
   runQuoters,
   runTrends,
   runArticle,

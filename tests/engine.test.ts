@@ -825,6 +825,196 @@ describe('archiveList', () => {
   });
 });
 
+// ── likes / archiveLikes fixtures ─────────────────────────────────────────────
+
+/**
+ * A rich user-likes timeline page (structurally identical to richUserTimelinePage
+ * since Likes and UserTweets share the same user result envelope).
+ */
+function richLikesPage(ids: string[], cursor?: string): unknown {
+  const entries: unknown[] = ids.map((id) => ({
+    entryId: `tweet-${id}`,
+    content: {
+      itemContent: {
+        tweet_results: {
+          result: {
+            __typename: 'Tweet',
+            rest_id: id,
+            core: {
+              user_results: {
+                result: {
+                  __typename: 'User',
+                  rest_id: `u${id}`,
+                  core: { screen_name: 'alice', name: 'Alice' },
+                  legacy: {
+                    profile_image_url_https: `https://pbs.twimg.com/profile_images/${id}/photo.jpg`,
+                  },
+                },
+              },
+            },
+            legacy: {
+              full_text: `liked tweet ${id}`,
+              favorite_count: 10,
+              created_at: 'Wed Jun 10 16:06:30 +0000 2026',
+              extended_entities: {
+                media: [
+                  {
+                    type: 'photo',
+                    media_url_https: `https://pbs.twimg.com/media/${id}.jpg`,
+                    original_info: { width: 800, height: 600 },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      },
+    },
+  }));
+  if (cursor !== undefined) {
+    entries.push({
+      entryId: `cursor-bottom-${cursor}`,
+      content: { cursorType: 'Bottom', value: cursor },
+    });
+  }
+  return {
+    data: {
+      user: {
+        result: {
+          timeline_v2: {
+            timeline: { instructions: [{ type: 'TimelineAddEntries', entries }] },
+          },
+        },
+      },
+    },
+  };
+}
+
+describe('likes (research)', () => {
+  test('returns a slim TweetPage for a user', async () => {
+    const userId = '42';
+    const handle = 'alice';
+    const client = fakeClientByOp({
+      UserByScreenName: { _start: userByScreenNameResponse(userId, handle) },
+      Likes: { _start: richLikesPage(['300', '200'], 'c1') },
+    });
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    const page = await engine.likes(handle, { limit: 2 });
+    expect(page.tweets.map((t) => t.id)).toEqual(['300', '200']);
+    expect(page.nextCursor).toBe('c1');
+  });
+
+  test('uses the Likes op', async () => {
+    const userId = '42';
+    const handle = 'alice';
+    const loggedOps: string[] = [];
+    const baseClient = fakeClientByOp({
+      UserByScreenName: { _start: userByScreenNameResponse(userId, handle) },
+      Likes: { _start: richLikesPage(['1']) },
+    });
+    const client: EngineClient = {
+      get: async (op, req) => {
+        loggedOps.push(op);
+        return baseClient.get(op, req);
+      },
+    };
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    await engine.likes(handle);
+    expect(loggedOps).toContain('Likes');
+    expect(loggedOps).not.toContain('UserTweets');
+  });
+
+  test('throws NOT_FOUND when user handle does not exist', async () => {
+    const client = fakeClientByOp({
+      UserByScreenName: {
+        _start: { data: { user: { result: { __typename: 'UserUnavailable' } } } },
+      },
+    });
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    await expect(engine.likes('ghost')).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+});
+
+describe('archiveLikes', () => {
+  test('returns rich ArchiveTweet[] with media and createdAtISO', async () => {
+    const userId = '42';
+    const handle = 'alice';
+    const client = fakeClientByOp({
+      UserByScreenName: { _start: userByScreenNameResponse(userId, handle) },
+      Likes: { _start: richLikesPage(['700', '600']) },
+    });
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    const results = await engine.archiveLikes(handle);
+    expect(results).toHaveLength(2);
+    expect(results[0]?.id).toBe('700');
+    expect(results[0]?.text).toBe('liked tweet 700');
+    expect(results[0]?.media?.[0]?.url).toMatch(/700\.jpg/);
+    expect(results[0]?.createdAtISO).toBe('2026-06-10T16:06:30+00:00');
+  });
+
+  test('uses the Likes op', async () => {
+    const userId = '42';
+    const handle = 'alice';
+    const loggedOps: string[] = [];
+    const baseClient = fakeClientByOp({
+      UserByScreenName: { _start: userByScreenNameResponse(userId, handle) },
+      Likes: { _start: richLikesPage(['1']) },
+    });
+    const client: EngineClient = {
+      get: async (op, req) => {
+        loggedOps.push(op);
+        return baseClient.get(op, req);
+      },
+    };
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    await engine.archiveLikes(handle);
+    expect(loggedOps).toContain('Likes');
+  });
+
+  test('throws NOT_FOUND when user handle does not exist', async () => {
+    const client = fakeClientByOp({
+      UserByScreenName: {
+        _start: { data: { user: { result: { __typename: 'UserUnavailable' } } } },
+      },
+    });
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    await expect(engine.archiveLikes('ghost')).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  test('membership stop halts after tolerance consecutive known ids', async () => {
+    const userId = '42';
+    const handle = 'alice';
+    const client = fakeClientByOp({
+      UserByScreenName: { _start: userByScreenNameResponse(userId, handle) },
+      Likes: {
+        _start: richLikesPage(['10', '9', '8'], 'c1'),
+        c1: richLikesPage(['7', '6', '5'], 'c2'),
+        c2: richLikesPage(['4', '3', '2'], 'c3'),
+      },
+    });
+    const knownIds = new Set(['7', '6', '5', '4', '3', '2', '1']);
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    const results = await engine.archiveLikes(handle, { knownIds });
+    expect(results.map((t) => t.id)).toEqual(['10', '9', '8']);
+  });
+
+  test('full mode bypasses membership-stop', async () => {
+    const userId = '42';
+    const handle = 'alice';
+    const client = fakeClientByOp({
+      UserByScreenName: { _start: userByScreenNameResponse(userId, handle) },
+      Likes: {
+        _start: richLikesPage(['10', '9', '8'], 'c1'),
+        c1: richLikesPage(['7', '6', '5']),
+      },
+    });
+    const knownIds = new Set(['10', '9', '8', '7', '6', '5']);
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    const results = await engine.archiveLikes(handle, { knownIds, full: true });
+    expect(results.map((t) => t.id)).toEqual(['10', '9', '8', '7', '6', '5']);
+  });
+});
+
 describe('archiveBookmarks', () => {
   test('returns rich ArchiveTweet[] with media url and createdAtISO set', async () => {
     const client = fakeClient({ _start: richBookmarkPage(['100', '200']) });

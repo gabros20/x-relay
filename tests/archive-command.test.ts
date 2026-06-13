@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runArchive, runWhoami } from '../src/commands/runners.ts';
+import { runArchive, runLikes, runWhoami } from '../src/commands/runners.ts';
 import { type Engine, EngineError } from '../src/engine/index.ts';
 import type {
   ArchiveTweet,
@@ -50,10 +50,13 @@ interface FakeEngineOpts {
   myPosts?: ArchiveTweet[];
   searchTweets?: ArchiveTweet[];
   listTweets?: ArchiveTweet[];
+  likesTweets?: ArchiveTweet[];
   /** Override me() return value (default: 'me'). */
   meHandle?: string | null;
   /** When set, archiveUserPosts throws this EngineError code. */
   userPostsError?: string;
+  /** When set, archiveLikes throws this EngineError code. */
+  archiveLikesError?: string;
   /** Canned profile for whoami(). Defaults to a minimal profile when meHandle is set. */
   whoamiProfile?: UserProfile | null;
 }
@@ -132,6 +135,15 @@ function fakeEngine(archiveTweetsOrOpts: ArchiveTweet[] | FakeEngineOpts): Engin
     },
     async archiveList(): Promise<ArchiveTweet[]> {
       return opts.listTweets ?? [];
+    },
+    async likes(): Promise<TweetPage> {
+      return { tweets: [] };
+    },
+    async archiveLikes(_handle: string): Promise<ArchiveTweet[]> {
+      if (opts.archiveLikesError) {
+        throw new EngineError(opts.archiveLikesError, `engine error: ${opts.archiveLikesError}`);
+      }
+      return opts.likesTweets ?? [];
     },
     async me(): Promise<string | null> {
       return opts.meHandle !== undefined ? opts.meHandle : 'me';
@@ -254,9 +266,9 @@ describe('runArchive — bookmarks target', () => {
     expect(json.tweets).toHaveLength(1);
   });
 
-  test('missing target returns INVALID_INPUT error envelope', async () => {
+  test('unknown target returns INVALID_INPUT error envelope', async () => {
     const engine = fakeEngine([]);
-    const env = await runArchive(engine, { target: 'likes' });
+    const env = await runArchive(engine, { target: 'unknown-target' });
     expect(env.ok).toBe(false);
     if (env.ok) return;
     expect(env.error.code).toBe('INVALID_INPUT');
@@ -590,6 +602,154 @@ describe('runArchive — list target', () => {
   test('missing --out and --stdout returns INVALID_INPUT', async () => {
     const engine = fakeEngine({});
     const env = await runArchive(engine, { target: 'list', listId: 'mylist123' });
+    expect(env.ok).toBe(false);
+    if (env.ok) return;
+    expect(env.error.code).toBe('INVALID_INPUT');
+  });
+});
+
+// ── archive likes target ──────────────────────────────────────────────────────
+
+describe('runArchive — likes target', () => {
+  test('saves archive with source=likes and handle set when handle is explicit', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'xrelay-arc-'));
+    const out = join(dir, 'archive.json');
+    const tweets = [makeArchiveTweet('500'), makeArchiveTweet('400')];
+    const engine = fakeEngine({ likesTweets: tweets });
+
+    const env = await runArchive(engine, { target: 'likes', handle: 'alice', out });
+
+    expect(env.ok).toBe(true);
+    if (!env.ok) return;
+    expect(env.data.source).toBe('likes');
+    expect(env.data.handle).toBe('alice');
+    expect(env.data.added).toBe(2);
+    expect(env.data.total).toBe(2);
+
+    // Verify file on disk has source=likes and handle stamped
+    const { loadArchive } = await import('../src/archive.ts');
+    const file = loadArchive(out);
+    expect(file?.source).toBe('likes');
+    expect(file?.handle).toBe('alice');
+
+    rmSync(dir, { recursive: true });
+  });
+
+  test('defaults handle to self (me()) when no handle provided', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'xrelay-arc-'));
+    const out = join(dir, 'archive.json');
+    const tweets = [makeArchiveTweet('600')];
+    // meHandle='me' by default in fakeEngine
+    const engine = fakeEngine({ likesTweets: tweets });
+
+    const env = await runArchive(engine, { target: 'likes', out });
+
+    expect(env.ok).toBe(true);
+    if (!env.ok) return;
+    expect(env.data.source).toBe('likes');
+    expect(env.data.handle).toBe('me'); // resolved from me()
+    expect(env.data.total).toBe(1);
+
+    rmSync(dir, { recursive: true });
+  });
+
+  test('returns INVALID_INPUT when me() is null and no handle provided', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'xrelay-arc-'));
+    const out = join(dir, 'archive.json');
+    const engine = fakeEngine({ meHandle: null });
+
+    const env = await runArchive(engine, { target: 'likes', out });
+
+    expect(env.ok).toBe(false);
+    if (env.ok) return;
+    expect(env.error.code).toBe('INVALID_INPUT');
+
+    rmSync(dir, { recursive: true });
+  });
+
+  test('missing --out and --stdout returns INVALID_INPUT (guard fires first)', async () => {
+    const engine = fakeEngine({});
+    const env = await runArchive(engine, { target: 'likes', handle: 'alice' });
+    expect(env.ok).toBe(false);
+    if (env.ok) return;
+    expect(env.error.code).toBe('INVALID_INPUT');
+  });
+
+  test('engine NOT_FOUND becomes error envelope', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'xrelay-arc-'));
+    const out = join(dir, 'archive.json');
+    const engine = fakeEngine({ archiveLikesError: 'NOT_FOUND' });
+    const env = await runArchive(engine, { target: 'likes', handle: 'ghost', out });
+    expect(env.ok).toBe(false);
+    if (env.ok) return;
+    expect(env.error.code).toBe('NOT_FOUND');
+    rmSync(dir, { recursive: true });
+  });
+
+  test('--stdout prints JSON with source=likes', async () => {
+    const engine = fakeEngine({ likesTweets: [makeArchiveTweet('700')], meHandle: 'self' });
+
+    const chunks: string[] = [];
+    const origWrite = process.stdout.write.bind(process.stdout);
+    // @ts-ignore override for test
+    process.stdout.write = (chunk: string) => {
+      chunks.push(chunk);
+      return true;
+    };
+
+    const env = await runArchive(engine, { target: 'likes', stdout: true });
+
+    // @ts-ignore restore
+    process.stdout.write = origWrite;
+
+    expect(env.ok).toBe(true);
+    if (!env.ok) return;
+    expect(env.data.out).toBeUndefined();
+    const json = JSON.parse(chunks.join(''));
+    expect(json.source).toBe('likes');
+    expect(json.handle).toBe('self');
+  });
+});
+
+// ── runLikes research runner ──────────────────────────────────────────────────
+
+describe('runLikes research runner', () => {
+  test('returns TweetPage envelope when handle is provided', async () => {
+    const engine = fakeEngine({});
+    // Override likes() to return a canned page
+    const engineWithLikes: typeof engine = {
+      ...engine,
+      async likes(): Promise<TweetPage> {
+        return {
+          tweets: [{ id: '1', url: '', text: 'x', author: {} as never, metrics: {} as never }],
+        };
+      },
+    };
+    const env = await runLikes(engineWithLikes, 'alice');
+    expect(env.ok).toBe(true);
+    if (!env.ok) return;
+    // TweetPage shape
+    expect((env.data as TweetPage).tweets).toHaveLength(1);
+  });
+
+  test('resolves self via me() when no handle is passed', async () => {
+    const resolvedHandle: string[] = [];
+    const engine = fakeEngine({ meHandle: 'myself' });
+    const engineWithLikes: typeof engine = {
+      ...engine,
+      async likes(handle): Promise<TweetPage> {
+        resolvedHandle.push(handle);
+        return { tweets: [] };
+      },
+    };
+    const env = await runLikes(engineWithLikes, undefined);
+    expect(env.ok).toBe(true);
+    expect(resolvedHandle).toEqual(['myself']);
+  });
+
+  test('returns INVALID_INPUT when no handle and me() is null', async () => {
+    const engine = fakeEngine({ meHandle: null });
+    const env = await runLikes(engine, undefined);
     expect(env.ok).toBe(false);
     if (env.ok) return;
     expect(env.error.code).toBe('INVALID_INPUT');

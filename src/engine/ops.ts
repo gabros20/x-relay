@@ -41,6 +41,7 @@ export const OPS = {
     queryId: 'pXYASW5kVylF3YMrGJovLg',
     operationName: 'CommunityTweetsTimeline',
   },
+  Likes: { queryId: 'dv5-II7_Bup_PHish7p6fw', operationName: 'Likes' },
 } as const satisfies Record<string, { queryId: string; operationName: string }>;
 
 export type OpName = keyof typeof OPS;
@@ -253,6 +254,35 @@ export interface UserMediaParams extends Overrides {
 }
 
 export function userMediaRequest(params: UserMediaParams): BuiltRequest {
+  const { userId, count = 40, cursor, kv, ft } = params;
+  const variables = withCursor(
+    {
+      userId,
+      count,
+      includePromotedContent: false,
+      withClientEventToken: false,
+      withBirdwatchNotes: false,
+      withVoice: true,
+      withV2Timeline: true,
+    },
+    cursor,
+  );
+  return {
+    variables: { ...variables, ...kv },
+    features: { ...FEATURES, ...ft },
+    fieldToggles: { withArticlePlainText: false },
+  };
+}
+
+// --- Likes ------------------------------------------------------------------
+
+export interface LikesParams extends Overrides {
+  userId: string;
+  count?: number;
+  cursor?: string;
+}
+
+export function likesRequest(params: LikesParams): BuiltRequest {
   const { userId, count = 40, cursor, kv, ft } = params;
   const variables = withCursor(
     {

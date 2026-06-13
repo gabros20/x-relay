@@ -140,6 +140,15 @@ export function runLikers(engine: Engine, tweetId: string, limit?: number) {
   return guard('likers', () => engine.likers(tweetId, lim(limit)));
 }
 
+export function runLikes(engine: Engine, handle: string | undefined, limit?: number) {
+  return guard('likes', async () => {
+    const resolvedHandle = handle || (await engine.me());
+    if (!resolvedHandle)
+      throw new EngineError('INVALID_INPUT', 'could not determine your handle — pass a handle');
+    return engine.likes(resolvedHandle, lim(limit));
+  });
+}
+
 export function runQuoters(engine: Engine, tweetId: string, limit?: number) {
   if (!tweetId) return Promise.resolve(err('quoters', 'INVALID_INPUT', 'missing tweet id'));
   return guard('quoters', () => engine.quoters(tweetId, lim(limit)));
@@ -484,6 +493,20 @@ async function runArchiveMyPosts(engine: Engine, opts: ArchiveCommandOpts): Prom
   });
 }
 
+/** Run the likes archive path and return an ArchiveResult. Defaults handle to self via me(). */
+async function runArchiveLikes(engine: Engine, opts: ArchiveCommandOpts): Promise<ArchiveResult> {
+  const handle = opts.handle ?? (await engine.me()) ?? undefined;
+  if (!handle) throw new EngineError('INVALID_INPUT', 'could not determine handle — pass a handle');
+  return runArchiveCore(opts, {
+    source: 'likes',
+    handle,
+    patchFile: (file) => {
+      file.handle = handle;
+    },
+    fetch: (knownIds) => engine.archiveLikes(handle, archiveFetchOpts(opts, knownIds)),
+  });
+}
+
 export function runArchive(
   engine: Engine,
   opts: ArchiveCommandOpts,
@@ -539,8 +562,10 @@ export function runArchive(
       );
     }
 
-    // Future targets (T4–T6).
     case 'likes':
+      return guard('archive', () => runArchiveLikes(engine, opts));
+
+    // Future targets (T5–T6).
     case 'feed':
       return Promise.resolve(
         err('archive', 'INVALID_INPUT', `archive target '${opts.target}' is not yet implemented`),

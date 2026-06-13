@@ -26,6 +26,7 @@ import {
   bookmarksRequest,
   communityRequest,
   communityTweetsRequest,
+  likesRequest,
   listRequest,
   searchRequest,
   tweetDetailRequest,
@@ -182,6 +183,24 @@ export interface Engine {
    * `full: true` to page through everything up to `limit`.
    */
   archiveList(listId: string, opts?: ArchiveOpts): Promise<ArchiveTweet[]>;
+  /**
+   * Fetch a user's liked tweets (slim research view) and return a TweetPage.
+   * Resolves userId via getUser(handle) — throws NOT_FOUND if the handle doesn't exist.
+   *
+   * NOTE: X only exposes the AUTHENTICATED user's own likes since June 2024.
+   * Requesting another user's likes will likely return an empty or error response.
+   */
+  likes(handle: string, opts?: PageOpts): Promise<TweetPage>;
+  /**
+   * Fetch a user's liked tweets at full fidelity and return them as ArchiveTweet[].
+   * Resolves userId via getUser(handle) — throws NOT_FOUND if the handle doesn't exist.
+   * Likes ARE id-ordered enough for incremental: supports knownIds / full like bookmarks.
+   * When handle is omitted, defaults to the authenticated user via me().
+   *
+   * NOTE: X only exposes the AUTHENTICATED user's own likes since June 2024.
+   * Requesting another user's likes will likely return an empty or error response.
+   */
+  archiveLikes(handle: string, opts?: ArchiveOpts): Promise<ArchiveTweet[]>;
   /** The authenticated user's own @handle (from the session), or null. Memoized. */
   me(): Promise<string | null>;
   /**
@@ -518,6 +537,19 @@ export function createEngine(deps: EngineDeps): Engine {
     );
   }
 
+  async function archiveLikesImpl(handle: string, opts?: ArchiveOpts): Promise<ArchiveTweet[]> {
+    const profile = await getUser(handle);
+    if (!profile) throw new EngineError('NOT_FOUND', `user @${handle} not found`);
+    return archiveTimeline(
+      async (cursor) => {
+        const value = await call('Likes', likesRequest({ userId: profile.id, cursor }));
+        return parseTimeline(value, { rich: true });
+      },
+      opts ?? {},
+      sleep,
+    );
+  }
+
   return {
     me,
 
@@ -738,6 +770,22 @@ export function createEngine(deps: EngineDeps): Engine {
         sleep,
       );
     },
+
+    async likes(handle, opts) {
+      const profile = await getUser(handle);
+      if (!profile) throw new EngineError('NOT_FOUND', `user @${handle} not found`);
+      const limit = opts?.limit ?? DEFAULT_LIMIT;
+      return paginate(
+        async (cursor) => {
+          const value = await call('Likes', likesRequest({ userId: profile.id, cursor }));
+          return parseTimeline(value);
+        },
+        limit,
+        opts?.stopAtId,
+      );
+    },
+
+    archiveLikes: archiveLikesImpl,
 
     async whoami() {
       const handle = await me();

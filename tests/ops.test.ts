@@ -7,6 +7,7 @@ import {
   communityTweetsRequest,
   encodeParams,
   graphqlUrl,
+  likesRequest,
   searchRequest,
   tweetDetailRequest,
   userByScreenNameRequest,
@@ -197,6 +198,58 @@ describe('communityRequest / communityTweetsRequest', () => {
   test('communityTweetsRequest honors a Recency ranking override', () => {
     const { variables } = communityTweetsRequest({ communityId: '1', rankingMode: 'Recency' });
     expect((variables as Record<string, unknown>).rankingMode).toBe('Recency');
+  });
+});
+
+describe('likesRequest', () => {
+  test('Likes op is present in OPS with the twitter-cli queryId', () => {
+    expect(OPS.Likes.queryId).toBe('dv5-II7_Bup_PHish7p6fw');
+    expect(OPS.Likes.operationName).toBe('Likes');
+  });
+
+  test('graphqlUrl for Likes builds the correct URL', () => {
+    expect(graphqlUrl('Likes')).toBe('https://x.com/i/api/graphql/dv5-II7_Bup_PHish7p6fw/Likes');
+  });
+
+  test('likesRequest encodes userId, count defaults and all expected flags', () => {
+    const { variables, features, fieldToggles } = likesRequest({ userId: '12345' });
+    const v = variables as Record<string, unknown>;
+    expect(v.userId).toBe('12345');
+    expect(v.count).toBe(40);
+    expect(v.includePromotedContent).toBe(false);
+    expect(v.withClientEventToken).toBe(false);
+    expect(v.withBirdwatchNotes).toBe(false);
+    expect(v.withVoice).toBe(true);
+    expect(v.withV2Timeline).toBe(true);
+    expect(fieldToggles).toEqual({ withArticlePlainText: false });
+    // features should include the base FEATURES blob
+    expect(
+      (features as Record<string, unknown>).responsive_web_graphql_timeline_navigation_enabled,
+    ).toBe(FEATURES.responsive_web_graphql_timeline_navigation_enabled);
+  });
+
+  test('likesRequest passes count and cursor', () => {
+    const { variables } = likesRequest({ userId: '1', count: 20, cursor: 'C' });
+    const v = variables as Record<string, unknown>;
+    expect(v.count).toBe(20);
+    expect(v.cursor).toBe('C');
+  });
+
+  test('likesRequest without cursor omits cursor key', () => {
+    const { variables } = likesRequest({ userId: '1' });
+    expect((variables as Record<string, unknown>).cursor).toBeUndefined();
+  });
+
+  test('kv overrides variables and ft overrides features', () => {
+    const { variables, features } = likesRequest({
+      userId: '1',
+      kv: { count: 99 },
+      ft: { responsive_web_graphql_timeline_navigation_enabled: false },
+    });
+    expect((variables as Record<string, unknown>).count).toBe(99);
+    expect(
+      (features as Record<string, unknown>).responsive_web_graphql_timeline_navigation_enabled,
+    ).toBe(false);
   });
 });
 
