@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runArchive } from '../src/commands/runners.ts';
-import type { Engine } from '../src/engine/index.ts';
+import { type Engine, EngineError } from '../src/engine/index.ts';
 import type {
   ArchiveTweet,
   Article,
@@ -44,8 +44,21 @@ function makeArchiveTweet(id: string): ArchiveTweet {
   };
 }
 
-/** A fake Engine that returns a fixed set of ArchiveTweets from archiveBookmarks. */
-function fakeEngine(archiveTweets: ArchiveTweet[]): Engine {
+interface FakeEngineOpts {
+  bookmarks?: ArchiveTweet[];
+  userPosts?: ArchiveTweet[];
+  myPosts?: ArchiveTweet[];
+  /** Override me() return value (default: 'me'). */
+  meHandle?: string | null;
+  /** When set, archiveUserPosts throws this EngineError code. */
+  userPostsError?: string;
+}
+
+/** A fake Engine that returns fixed sets of ArchiveTweets per archive target. */
+function fakeEngine(archiveTweetsOrOpts: ArchiveTweet[] | FakeEngineOpts): Engine {
+  const opts: FakeEngineOpts = Array.isArray(archiveTweetsOrOpts)
+    ? { bookmarks: archiveTweetsOrOpts }
+    : archiveTweetsOrOpts;
   return {
     async search(): Promise<SearchResult> {
       return { query: '', product: 'Top', tweets: [] };
@@ -99,10 +112,19 @@ function fakeEngine(archiveTweets: ArchiveTweet[]): Engine {
       return null;
     },
     async archiveBookmarks(): Promise<ArchiveTweet[]> {
-      return archiveTweets;
+      return opts.bookmarks ?? [];
+    },
+    async archiveUserPosts(_handle: string): Promise<ArchiveTweet[]> {
+      if (opts.userPostsError) {
+        throw new EngineError(opts.userPostsError, `engine error: ${opts.userPostsError}`);
+      }
+      return opts.userPosts ?? [];
+    },
+    async archiveMyPosts(): Promise<ArchiveTweet[]> {
+      return opts.myPosts ?? [];
     },
     async me(): Promise<string | null> {
-      return 'me';
+      return opts.meHandle !== undefined ? opts.meHandle : 'me';
     },
   };
 }
@@ -218,6 +240,169 @@ describe('runArchive — bookmarks target', () => {
   test('missing both --out and --stdout returns INVALID_INPUT error envelope', async () => {
     const engine = fakeEngine([makeArchiveTweet('100')]);
     const env = await runArchive(engine, { target: 'bookmarks' });
+    expect(env.ok).toBe(false);
+    if (env.ok) return;
+    expect(env.error.code).toBe('INVALID_INPUT');
+  });
+});
+
+// ── archive user target ───────────────────────────────────────────────────────
+
+describe('runArchive — user target', () => {
+  test('saves archive with source=user and handle set', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'xrelay-arc-'));
+    const out = join(dir, 'archive.json');
+    const tweets = [makeArchiveTweet('300'), makeArchiveTweet('200')];
+    const engine = fakeEngine({ userPosts: tweets });
+
+    const env = await runArchive(engine, { target: 'user', handle: 'alice', out });
+
+    expect(env.ok).toBe(true);
+    if (!env.ok) return;
+    expect(env.data.source).toBe('user');
+    expect(env.data.handle).toBe('alice');
+    expect(env.data.added).toBe(2);
+    expect(env.data.total).toBe(2);
+    expect(env.data.newestId).toBe('300');
+
+    // Verify the file on disk has the right source and handle
+    const { loadArchive } = await import('../src/archive.ts');
+    const file = loadArchive(out);
+    expect(file?.source).toBe('user');
+    expect(file?.handle).toBe('alice');
+
+    rmSync(dir, { recursive: true });
+  });
+
+  test('incremental run stops after known ids and only adds new tweets', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'xrelay-arc-'));
+    const out = join(dir, 'archive.json');
+
+    const { mergeArchive, saveArchive: save, loadArchive } = await import('../src/archive.ts');
+    const seed = mergeArchive(null, [makeArchiveTweet('200'), makeArchiveTweet('100')], {
+      generatedAt: '2026-01-01T00:00:00+00:00',
+    });
+    seed.file.source = 'user';
+    seed.file.handle = 'alice';
+    save(out, seed.file);
+
+    const engine = fakeEngine({ userPosts: [makeArchiveTweet('300'), makeArchiveTweet('200')] });
+    const env = await runArchive(engine, { target: 'user', handle: 'alice', out });
+
+    expect(env.ok).toBe(true);
+    if (!env.ok) return;
+    expect(env.data.added).toBe(1); // only 300 is new
+    expect(env.data.total).toBe(3); // 300 + 200 + 100
+
+    const file = loadArchive(out);
+    expect(file?.source).toBe('user');
+    expect(file?.handle).toBe('alice');
+
+    rmSync(dir, { recursive: true });
+  });
+
+  test('missing handle returns INVALID_INPUT error envelope', async () => {
+    const engine = fakeEngine({});
+    const env = await runArchive(engine, { target: 'user', stdout: true });
+    expect(env.ok).toBe(false);
+    if (env.ok) return;
+    expect(env.error.code).toBe('INVALID_INPUT');
+  });
+
+  test('missing --out and --stdout returns INVALID_INPUT (guard fires first)', async () => {
+    const engine = fakeEngine({});
+    const env = await runArchive(engine, { target: 'user', handle: 'alice' });
+    expect(env.ok).toBe(false);
+    if (env.ok) return;
+    expect(env.error.code).toBe('INVALID_INPUT');
+  });
+
+  test('engine NOT_FOUND becomes error envelope', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'xrelay-arc-'));
+    const out = join(dir, 'archive.json');
+    const engine = fakeEngine({ userPostsError: 'NOT_FOUND' });
+    const env = await runArchive(engine, { target: 'user', handle: 'ghost', out });
+    expect(env.ok).toBe(false);
+    if (env.ok) return;
+    expect(env.error.code).toBe('NOT_FOUND');
+    rmSync(dir, { recursive: true });
+  });
+
+  test('--stdout prints JSON with source=user without saving', async () => {
+    const engine = fakeEngine({ userPosts: [makeArchiveTweet('500')] });
+
+    const chunks: string[] = [];
+    const origWrite = process.stdout.write.bind(process.stdout);
+    // @ts-ignore override for test
+    process.stdout.write = (chunk: string) => {
+      chunks.push(chunk);
+      return true;
+    };
+
+    const env = await runArchive(engine, { target: 'user', handle: 'alice', stdout: true });
+
+    // @ts-ignore restore
+    process.stdout.write = origWrite;
+
+    expect(env.ok).toBe(true);
+    if (!env.ok) return;
+    expect(env.data.out).toBeUndefined();
+    const json = JSON.parse(chunks.join(''));
+    expect(json.source).toBe('user');
+    expect(json.handle).toBe('alice');
+  });
+});
+
+// ── archive my-posts target ───────────────────────────────────────────────────
+
+describe('runArchive — my-posts target', () => {
+  test('saves archive with source=my-posts', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'xrelay-arc-'));
+    const out = join(dir, 'archive.json');
+    const tweets = [makeArchiveTweet('400'), makeArchiveTweet('300')];
+    const engine = fakeEngine({ myPosts: tweets });
+
+    const env = await runArchive(engine, { target: 'my-posts', out });
+
+    expect(env.ok).toBe(true);
+    if (!env.ok) return;
+    expect(env.data.source).toBe('my-posts');
+    expect(env.data.added).toBe(2);
+    expect(env.data.total).toBe(2);
+    expect(env.data.newestId).toBe('400');
+
+    const { loadArchive } = await import('../src/archive.ts');
+    const file = loadArchive(out);
+    expect(file?.source).toBe('my-posts');
+
+    rmSync(dir, { recursive: true });
+  });
+
+  test('incremental run merges correctly', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'xrelay-arc-'));
+    const out = join(dir, 'archive.json');
+
+    const { mergeArchive, saveArchive: save } = await import('../src/archive.ts');
+    const seed = mergeArchive(null, [makeArchiveTweet('200'), makeArchiveTweet('100')], {
+      generatedAt: '2026-01-01T00:00:00+00:00',
+    });
+    seed.file.source = 'my-posts';
+    save(out, seed.file);
+
+    const engine = fakeEngine({ myPosts: [makeArchiveTweet('300'), makeArchiveTweet('200')] });
+    const env = await runArchive(engine, { target: 'my-posts', out });
+
+    expect(env.ok).toBe(true);
+    if (!env.ok) return;
+    expect(env.data.added).toBe(1);
+    expect(env.data.total).toBe(3);
+
+    rmSync(dir, { recursive: true });
+  });
+
+  test('missing --out and --stdout returns INVALID_INPUT (guard fires first)', async () => {
+    const engine = fakeEngine({});
+    const env = await runArchive(engine, { target: 'my-posts' });
     expect(env.ok).toBe(false);
     if (env.ok) return;
     expect(env.error.code).toBe('INVALID_INPUT');

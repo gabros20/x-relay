@@ -372,6 +372,226 @@ function richBookmarkPage(ids: string[], cursor?: string): unknown {
   };
 }
 
+// ── archiveUserPosts / archiveMyPosts fixtures ───────────────────────────────
+
+/** A synthetic UserByScreenName response returning a user with the given id and handle. */
+function userByScreenNameResponse(userId: string, handle: string): unknown {
+  return {
+    data: {
+      user: {
+        result: {
+          __typename: 'User',
+          rest_id: userId,
+          core: { screen_name: handle, name: handle },
+          legacy: {},
+        },
+      },
+    },
+  };
+}
+
+/**
+ * A rich user-timeline page (works for both UserTweets and UserTweetsAndReplies).
+ * Structurally identical to richBookmarkPage but wrapped in a user_result envelope
+ * that parseTimeline still finds via findDict('instructions').
+ */
+function richUserTimelinePage(ids: string[], cursor?: string): unknown {
+  const entries: unknown[] = ids.map((id) => ({
+    entryId: `tweet-${id}`,
+    content: {
+      itemContent: {
+        tweet_results: {
+          result: {
+            __typename: 'Tweet',
+            rest_id: id,
+            core: {
+              user_results: {
+                result: {
+                  __typename: 'User',
+                  rest_id: `u${id}`,
+                  core: { screen_name: 'alice', name: 'Alice' },
+                  legacy: {
+                    profile_image_url_https: `https://pbs.twimg.com/profile_images/${id}/photo.jpg`,
+                  },
+                },
+              },
+            },
+            legacy: {
+              full_text: `user tweet ${id}`,
+              favorite_count: 3,
+              created_at: 'Wed Jun 10 16:06:30 +0000 2026',
+              extended_entities: {
+                media: [
+                  {
+                    type: 'photo',
+                    media_url_https: `https://pbs.twimg.com/media/${id}.jpg`,
+                    original_info: { width: 800, height: 600 },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      },
+    },
+  }));
+  if (cursor !== undefined) {
+    entries.push({
+      entryId: `cursor-bottom-${cursor}`,
+      content: { cursorType: 'Bottom', value: cursor },
+    });
+  }
+  return {
+    data: {
+      user: {
+        result: {
+          timeline_v2: {
+            timeline: { instructions: [{ type: 'TimelineAddEntries', entries }] },
+          },
+        },
+      },
+    },
+  };
+}
+
+/**
+ * A fake client that serves different canned responses based on op name.
+ * - opPages: map of op name → (cursor → value)
+ */
+function fakeClientByOp(opPages: Record<string, Record<string, unknown>>): EngineClient {
+  const log: string[] = [];
+  const client: EngineClient & { log: string[] } = {
+    log,
+    get: async (op, request) => {
+      log.push(op);
+      const pages = opPages[op] ?? {};
+      const cursor = (request.variables as { cursor?: string }).cursor ?? '_start';
+      const value = pages[cursor];
+      if (value === undefined)
+        return {
+          ok: false,
+          error: { code: 'FETCH_FAILED', message: `no canned page for op=${op} cursor=${cursor}` },
+        };
+      return { ok: true, value };
+    },
+  };
+  return client;
+}
+
+describe('archiveUserPosts', () => {
+  test('returns rich ArchiveTweet[] for a user timeline', async () => {
+    const userId = '42';
+    const handle = 'alice';
+    const client = fakeClientByOp({
+      UserByScreenName: { _start: userByScreenNameResponse(userId, handle) },
+      UserTweets: { _start: richUserTimelinePage(['500', '400']) },
+    });
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    const results: ArchiveTweet[] = await engine.archiveUserPosts(handle);
+    expect(results).toHaveLength(2);
+    expect(results[0]?.id).toBe('500');
+    expect(results[0]?.createdAtISO).toBe('2026-06-10T16:06:30+00:00');
+    expect(results[0]?.media?.[0]?.url).toMatch(/500\.jpg/);
+  });
+
+  test('with --replies uses the UserTweetsAndReplies op', async () => {
+    const userId = '42';
+    const handle = 'alice';
+    const loggedOps: string[] = [];
+    const baseClient = fakeClientByOp({
+      UserByScreenName: { _start: userByScreenNameResponse(userId, handle) },
+      UserTweetsAndReplies: { _start: richUserTimelinePage(['600']) },
+    });
+    // Wrap to capture ops
+    const client: EngineClient = {
+      get: async (op, req) => {
+        loggedOps.push(op);
+        return baseClient.get(op, req);
+      },
+    };
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    const results = await engine.archiveUserPosts(handle, { replies: true });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.id).toBe('600');
+    expect(loggedOps).toContain('UserTweetsAndReplies');
+    expect(loggedOps).not.toContain('UserTweets');
+  });
+
+  test('throws NOT_FOUND when user handle does not exist', async () => {
+    const client = fakeClientByOp({
+      UserByScreenName: {
+        _start: { data: { user: { result: { __typename: 'UserUnavailable' } } } },
+      },
+    });
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    await expect(engine.archiveUserPosts('ghost')).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  test('membership stop halts after tolerance consecutive known ids', async () => {
+    const userId = '42';
+    const handle = 'alice';
+    const client = fakeClientByOp({
+      UserByScreenName: { _start: userByScreenNameResponse(userId, handle) },
+      UserTweets: {
+        _start: richUserTimelinePage(['10', '9', '8'], 'c1'),
+        c1: richUserTimelinePage(['7', '6', '5'], 'c2'),
+        c2: richUserTimelinePage(['4', '3', '2'], 'c3'),
+      },
+    });
+    const knownIds = new Set(['7', '6', '5', '4', '3', '2', '1']);
+    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    const results = await engine.archiveUserPosts(handle, { knownIds });
+    expect(results.map((t) => t.id)).toEqual(['10', '9', '8']);
+  });
+});
+
+describe('archiveMyPosts', () => {
+  test('resolves handle via me() and delegates to archiveUserPosts', async () => {
+    const userId = '99';
+    const handle = 'myself';
+    // Provide a fake fetchImpl that serves /1.1/account/settings.json.
+    // Also provide a no-op transaction provider so the ClientTransaction init
+    // (which fetches the X homepage) is bypassed entirely.
+    const settingsResponse = JSON.stringify({ screen_name: handle });
+    const fakeFetch = async (url: string | URL | Request): Promise<Response> => {
+      const urlStr = typeof url === 'string' ? url : url.toString();
+      if (urlStr.includes('/1.1/account/settings.json')) {
+        return new Response(settingsResponse, { status: 200 });
+      }
+      return new Response('not found', { status: 404 });
+    };
+    const client = fakeClientByOp({
+      UserByScreenName: { _start: userByScreenNameResponse(userId, handle) },
+      UserTweets: { _start: richUserTimelinePage(['700', '800']) },
+    });
+    const engine = createEngine({
+      cookies,
+      client,
+      sleep: async () => {},
+      fetchImpl: fakeFetch as typeof fetch,
+      transaction: async () => 'fake-txid',
+    });
+    const results: ArchiveTweet[] = await engine.archiveMyPosts();
+    expect(results).toHaveLength(2);
+    expect(results.map((t) => t.id)).toEqual(['700', '800']);
+  });
+
+  test('throws INVALID_INPUT when me() returns null', async () => {
+    // Use a fetchImpl that always fails for the settings endpoint, and a no-op
+    // transaction provider to prevent homepage fetching.
+    const fakeFetch = async (): Promise<Response> => new Response('error', { status: 500 });
+    const client = fakeClientByOp({});
+    const engine = createEngine({
+      cookies,
+      client,
+      sleep: async () => {},
+      fetchImpl: fakeFetch as typeof fetch,
+      transaction: async () => 'fake-txid',
+    });
+    await expect(engine.archiveMyPosts()).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+  });
+});
+
 describe('archiveBookmarks', () => {
   test('returns rich ArchiveTweet[] with media url and createdAtISO set', async () => {
     const client = fakeClient({ _start: richBookmarkPage(['100', '200']) });

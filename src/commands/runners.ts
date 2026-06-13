@@ -310,12 +310,18 @@ export interface ArchiveCommandOpts {
   prune?: boolean;
   /** When true, print the archive JSON to stdout instead of saving to disk. */
   stdout?: boolean;
+  /** For user target: the @handle to archive. */
+  handle?: string;
+  /** For user / my-posts targets: include replies in the sweep. */
+  replies?: boolean;
 }
 
 export interface ArchiveResult {
   source: 'bookmarks' | 'user' | 'my-posts' | 'list' | 'search' | 'likes' | 'feed';
   /** Path the file was written to (undefined when --stdout). */
   out?: string;
+  /** For user / my-posts sources: the target @handle. */
+  handle?: string;
   /** Number of newly added tweets (not in the prior archive). */
   added: number;
   /** Total tweets in the resulting archive. */
@@ -362,6 +368,84 @@ async function runArchiveBookmarks(
   };
 }
 
+/** Run the user-posts archive path and return an ArchiveResult. */
+async function runArchiveUser(engine: Engine, opts: ArchiveCommandOpts): Promise<ArchiveResult> {
+  const handle = opts.handle;
+  if (!handle) throw new EngineError('INVALID_INPUT', 'archive user requires a handle');
+  const outPath = opts.out;
+
+  const existing = outPath ? loadArchive(outPath) : null;
+  const knownIds = !opts.full && existing ? new Set(existing.tweets.map((t) => t.id)) : undefined;
+
+  const fresh = await engine.archiveUserPosts(handle, {
+    ...(knownIds !== undefined ? { knownIds } : {}),
+    ...(opts.full ? { full: true } : {}),
+    ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
+    ...(opts.replies ? { replies: true } : {}),
+  });
+
+  const generatedAt = new Date().toISOString();
+  const { file, added } = mergeArchive(existing, fresh, {
+    generatedAt,
+    ...(opts.prune ? { prune: true } : {}),
+  });
+
+  file.source = 'user';
+  file.handle = handle;
+
+  if (opts.stdout) {
+    process.stdout.write(JSON.stringify(file, null, 2));
+  } else if (outPath) {
+    saveArchive(outPath, file);
+  }
+
+  return {
+    source: 'user',
+    handle,
+    ...(outPath ? { out: outPath } : {}),
+    added,
+    total: file.count,
+    ...(file.newestId !== undefined ? { newestId: file.newestId } : {}),
+  };
+}
+
+/** Run the my-posts archive path and return an ArchiveResult. */
+async function runArchiveMyPosts(engine: Engine, opts: ArchiveCommandOpts): Promise<ArchiveResult> {
+  const outPath = opts.out;
+
+  const existing = outPath ? loadArchive(outPath) : null;
+  const knownIds = !opts.full && existing ? new Set(existing.tweets.map((t) => t.id)) : undefined;
+
+  const fresh = await engine.archiveMyPosts({
+    ...(knownIds !== undefined ? { knownIds } : {}),
+    ...(opts.full ? { full: true } : {}),
+    ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
+    ...(opts.replies ? { replies: true } : {}),
+  });
+
+  const generatedAt = new Date().toISOString();
+  const { file, added } = mergeArchive(existing, fresh, {
+    generatedAt,
+    ...(opts.prune ? { prune: true } : {}),
+  });
+
+  file.source = 'my-posts';
+
+  if (opts.stdout) {
+    process.stdout.write(JSON.stringify(file, null, 2));
+  } else if (outPath) {
+    saveArchive(outPath, file);
+  }
+
+  return {
+    source: 'my-posts',
+    ...(outPath ? { out: outPath } : {}),
+    added,
+    total: file.count,
+    ...(file.newestId !== undefined ? { newestId: file.newestId } : {}),
+  };
+}
+
 export function runArchive(
   engine: Engine,
   opts: ArchiveCommandOpts,
@@ -377,9 +461,13 @@ export function runArchive(
     case 'bookmarks':
       return guard('archive', () => runArchiveBookmarks(engine, opts));
 
-    // Future targets (T1–T6) — each will replace this arm with a real handler.
     case 'user':
+      return guard('archive', () => runArchiveUser(engine, opts));
+
     case 'my-posts':
+      return guard('archive', () => runArchiveMyPosts(engine, opts));
+
+    // Future targets (T2–T6) — each will replace this arm with a real handler.
     case 'list':
     case 'search':
     case 'likes':

@@ -133,8 +133,11 @@ export const COMMANDS: CommandDef[] = [
   {
     name: 'archive',
     cost: 'medium — incremental',
-    summary: 'Full-fidelity capture of your bookmarks to a rich JSON archive.',
-    usage: 'xrelay archive bookmarks [--out <file.json>] [--limit N] [--full] [--prune] [--stdout]',
+    summary: 'Full-fidelity capture of bookmarks or a user timeline to a rich JSON archive.',
+    usage:
+      'xrelay archive bookmarks [--out <file.json>] [--limit N] [--full] [--prune] [--stdout]\n' +
+      '       xrelay archive user <handle> [--replies] [--out <file.json>] [--limit N] [--full] [--prune] [--stdout]\n' +
+      '       xrelay archive my-posts [--replies] [--out <file.json>] [--limit N] [--full] [--prune] [--stdout]',
   },
 ];
 

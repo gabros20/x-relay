@@ -145,6 +145,23 @@ export interface Engine {
    * With `full: true`: ignores `knownIds` and pages up to `limit`.
    */
   archiveBookmarks(opts?: ArchiveBookmarksOpts): Promise<ArchiveTweet[]>;
+  /**
+   * Fetch a user's timeline at full fidelity and return them as ArchiveTweet[].
+   * Resolves the user via getUser(handle) — throws NOT_FOUND if the handle doesn't exist.
+   * With `replies: true` uses the UserTweetsAndReplies op.
+   * Default (incremental): stops after `tolerance` consecutive known ids when `knownIds` is provided.
+   * With `full: true`: ignores `knownIds` and pages up to `limit`.
+   */
+  archiveUserPosts(
+    handle: string,
+    opts?: ArchiveOpts & { replies?: boolean },
+  ): Promise<ArchiveTweet[]>;
+  /**
+   * Fetch the authenticated user's own posts at full fidelity as ArchiveTweet[].
+   * Resolves self handle via me() — throws INVALID_INPUT if null.
+   * Delegates to archiveUserPosts internally.
+   */
+  archiveMyPosts(opts?: ArchiveOpts & { replies?: boolean }): Promise<ArchiveTweet[]>;
   /** The authenticated user's own @handle (from the session), or null. Memoized. */
   me(): Promise<string | null>;
 }
@@ -458,6 +475,24 @@ export function createEngine(deps: EngineDeps): Engine {
     return parseUserResult(result);
   }
 
+  async function archiveUserPostsImpl(
+    handle: string,
+    opts?: ArchiveOpts & { replies?: boolean },
+  ): Promise<ArchiveTweet[]> {
+    const profile = await getUser(handle);
+    if (!profile) throw new EngineError('NOT_FOUND', `user @${handle} not found`);
+    const replies = opts?.replies === true;
+    return archiveTimeline(
+      async (cursor) => {
+        const req = userTweetsRequest({ userId: profile.id, replies, cursor });
+        const value = await call(req.op, req);
+        return parseTimeline(value, { rich: true });
+      },
+      opts ?? {},
+      sleep,
+    );
+  }
+
   return {
     me,
 
@@ -640,6 +675,15 @@ export function createEngine(deps: EngineDeps): Engine {
         opts ?? {},
         sleep,
       );
+    },
+
+    archiveUserPosts: archiveUserPostsImpl,
+
+    async archiveMyPosts(opts) {
+      const handle = await me();
+      if (!handle)
+        throw new EngineError('INVALID_INPUT', 'could not determine your handle — pass --handle');
+      return archiveUserPostsImpl(handle, opts);
     },
   };
 

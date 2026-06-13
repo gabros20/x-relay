@@ -5,6 +5,7 @@
 import { fileURLToPath } from 'node:url';
 import type { CacheSort } from './cache/index.ts';
 import {
+  type ArchiveCommandOpts,
   type CacheViewOpts,
   type SearchCommandOpts,
   runArchive,
@@ -109,6 +110,24 @@ const num = (p: ParsedArgs, name: string): number | undefined => {
 
 const PRODUCTS = new Set<SearchProduct>(['Top', 'Latest', 'Media', 'People']);
 const SORTS = new Set<CacheSort>(['relevance', 'newest', 'oldest', 'likes', 'views', 'bookmarks']);
+
+function buildArchiveOpts(parsed: ParsedArgs): ArchiveCommandOpts {
+  const target = parsed.positionals[0] ?? '';
+  // For `archive user <handle>`, positionals[1] is the handle.
+  const rawHandle = target === 'user' ? (parsed.positionals[1] ?? '') : '';
+  const archiveHandle = rawHandle ? (extractHandle(rawHandle) ?? rawHandle) : undefined;
+  const limit = num(parsed, 'limit');
+  return {
+    target,
+    ...(first(parsed, 'out') ? { out: first(parsed, 'out') } : {}),
+    ...(limit !== undefined ? { limit } : {}),
+    ...(parsed.bools.has('full') ? { full: true } : {}),
+    ...(parsed.bools.has('prune') ? { prune: true } : {}),
+    ...(parsed.bools.has('stdout') ? { stdout: true } : {}),
+    ...(archiveHandle ? { handle: archiveHandle } : {}),
+    ...(parsed.bools.has('replies') ? { replies: true } : {}),
+  };
+}
 
 function buildCacheOpts(parsed: ParsedArgs): CacheViewOpts {
   const limit = num(parsed, 'limit');
@@ -235,14 +254,7 @@ export async function dispatch(parsed: ParsedArgs, engine: Engine): Promise<Enve
       });
     }
     case 'archive':
-      return runArchive(engine, {
-        target,
-        ...(first(parsed, 'out') ? { out: first(parsed, 'out') } : {}),
-        ...(num(parsed, 'limit') !== undefined ? { limit: num(parsed, 'limit') } : {}),
-        ...(parsed.bools.has('full') ? { full: true } : {}),
-        ...(parsed.bools.has('prune') ? { prune: true } : {}),
-        ...(parsed.bools.has('stdout') ? { stdout: true } : {}),
-      });
+      return runArchive(engine, buildArchiveOpts(parsed));
     default:
       return (
         dispatchReadOps(parsed, engine, command, target) ??
