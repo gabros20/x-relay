@@ -29,7 +29,8 @@ import {
   runUserMedia,
   runUserPosts,
 } from './commands/index.ts';
-import { type Engine, createEngine } from './engine/index.ts';
+import { createEngineFromEnv } from './engine/hermes-tweet.ts';
+import type { Engine } from './engine/index.ts';
 import type { SearchProduct } from './engine/ops.ts';
 import { extractHandle, extractTweetId } from './ids.ts';
 import { toJson } from './output.ts';
@@ -37,7 +38,7 @@ import type { Envelope } from './types.ts';
 
 let engine: Engine | undefined;
 const getEngine = (): Engine => {
-  if (engine === undefined) engine = createEngine({});
+  if (engine === undefined) engine = createEngineFromEnv({});
   return engine;
 };
 

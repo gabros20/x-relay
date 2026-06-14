@@ -47,7 +47,8 @@ import {
 } from './commands/index.ts';
 import type { SearchQueryFlags } from './commands/query.ts';
 import { COMMANDS, commandNames } from './commands/registry.ts';
-import { type Engine, createEngine } from './engine/index.ts';
+import { createEngineFromEnv } from './engine/hermes-tweet.ts';
+import type { Engine } from './engine/index.ts';
 import type { SearchProduct } from './engine/ops.ts';
 import { extractHandle, extractTweetId } from './ids.ts';
 import { err, toJson } from './output.ts';
@@ -454,7 +455,7 @@ export async function run(argv: string[], engine?: Engine): Promise<number> {
     );
     return 2;
   }
-  const eng = engine ?? createEngine({});
+  const eng = engine ?? createEngineFromEnv({});
   const envelope = await dispatch(parsed, eng);
   process.stdout.write(`${toJson(envelope)}\n`);
   return envelope.ok ? 0 : 1;

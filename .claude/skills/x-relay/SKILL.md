@@ -282,6 +282,21 @@ npm i -g x-relay-mcp
 Cookies are read automatically from your logged-in browser (macOS Keychain). The first run may show a one-time
 Keychain "Always Allow" prompt. Assumes a residential IP (run locally); datacenter IPs are blocked by X.
 
+### Optional Hermes Tweet backend
+
+Use this only when the host cannot use local browser cookies but can call Hermes Tweet/Xquik:
+
+```
+export XRELAY_BACKEND=hermes-tweet
+export HERMES_TWEET_API_KEY="xq_..."
+# Optional, defaults to https://xquik.com
+export HERMES_TWEET_BASE_URL="https://xquik.com"
+```
+
+`XQUIK_API_KEY` and `XQUIK_BASE_URL` work too. This backend covers `search` and
+`user`, preserves the same JSON envelope, and leaves unsupported commands on the
+normal local backend.
+
 ### Account pool + proxy (optional — for heavy/sustained use)
 
 X rate-limits per account and blocks datacenter IPs. For deep sweeps, give the tool **several sessions, each
