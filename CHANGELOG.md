@@ -1,3 +1,26 @@
+# [1.4.0](https://github.com/gabros20/x-relay/compare/v1.3.0...v1.4.0) (2026-06-14)
+
+
+### Bug Fixes
+
+* **T8:** quote attachment_url parity — /i/status/<id> not /i/web/status/<id> ([c9315d8](https://github.com/gabros20/x-relay/commit/c9315d8072a08316617019781adb213d4d87995a))
+
+
+### Features
+
+* **archive:** add archiveSearch and archiveList engine methods + runners (T2) ([b1958d0](https://github.com/gabros20/x-relay/commit/b1958d0359c5c50405c3f9d5e188592b25c417a3))
+* **archive:** full-fidelity bookmark archive branch ([56314df](https://github.com/gabros20/x-relay/commit/56314dfb165c85a0f3f1fc79671bae426e8a6a10))
+* **archive:** T1 — archive user <handle> [--replies] and archive my-posts ([dde5d01](https://github.com/gabros20/x-relay/commit/dde5d01a6f7cca6d21b8b259ca6449d756f4cc88))
+* **T10:** retweet / unretweet / delete / follow / unfollow write commands ([34ef699](https://github.com/gabros20/x-relay/commit/34ef699834cfe59a984e21a3965a1196beb6a592))
+* **T12:** add image attachments to post/reply/quote via chunked media upload ([3aa5ac0](https://github.com/gabros20/x-relay/commit/3aa5ac04c5a53c952be3d11fc9eb166ec055a08a))
+* **T3:** --since archive post-filter + whoami/status command ([09cbf4d](https://github.com/gabros20/x-relay/commit/09cbf4df676db72f2b1096d4e9e4a7e1ef3a81d4))
+* **T4:** likes capability — research command + archive target ([81ada14](https://github.com/gabros20/x-relay/commit/81ada1403d68d41c5dd7269678e69421d5456521))
+* **T5:** feed capability — research command + archive target ([1062307](https://github.com/gabros20/x-relay/commit/10623075e91ab6698f3fde0ea16bdfd4e650c389))
+* **T6:** bookmark folders — list, per-folder timeline, and folder archive ([d28e638](https://github.com/gabros20/x-relay/commit/d28e6383f32d729f7b9356905476d8d5851faea4))
+* **T7:** write foundation — POST GraphQL + CSRF + v1.1 REST + confirm guard ([14b4b48](https://github.com/gabros20/x-relay/commit/14b4b48ee4d44729863bcf1a5c3c0148777dc219))
+* **T8:** post / reply / quote write commands via CreateTweet ([52cde83](https://github.com/gabros20/x-relay/commit/52cde837a741dcb627f0ccb965d9dc162042d82d))
+* **T9:** like / unlike / bookmark / unbookmark reversible write toggles ([b9cf16f](https://github.com/gabros20/x-relay/commit/b9cf16fa1802da4d809026eba3a5f2e7b7ee58cf))
+
 # [1.3.0](https://github.com/gabros20/x-relay/compare/v1.2.0...v1.3.0) (2026-06-05)
 
 
