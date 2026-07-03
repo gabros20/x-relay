@@ -3,7 +3,7 @@
 // context on full JSON envelopes or hand-rank engagement. No I/O; operates on
 // the normalized `Tweet` from src/types.ts. CLI wiring lives in a later task.
 
-import type { Tweet } from './types';
+import type { Tweet } from './types.ts';
 
 const TEXT_LIMIT = 280;
 

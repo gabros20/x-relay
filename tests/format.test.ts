@@ -29,6 +29,11 @@ describe('engagementScore', () => {
     expect(engagementScore(tweet({ id: '1', metrics: {} }))).toBe(0);
     expect(engagementScore(tweet({ id: '2', metrics: { replies: 4 } }))).toBe(12);
   });
+
+  it('ignores views, retweets and quotes', () => {
+    const t = tweet({ id: '1', metrics: { views: 1000, retweets: 50, quotes: 10 } });
+    expect(engagementScore(t)).toBe(0);
+  });
 });
 
 describe('sortByEngagement', () => {
@@ -102,6 +107,15 @@ describe('compactTweet', () => {
     expect(out).toBe(`${'x'.repeat(280)}…`);
     expect([...out].length).toBe(281); // 280 chars + 1 ellipsis
   });
+
+  it('truncates on a code-point boundary without splitting an astral emoji', () => {
+    // 😀 is the 280th code point; a trailing 'y' pushes length to 281 → truncates.
+    const text = `${'x'.repeat(279)}😀y`;
+    const out = compactTweet(tweet({ id: '1', text })).text;
+    expect(out).toBe(`${'x'.repeat(279)}😀…`); // emoji kept intact, no split
+    expect([...out].length).toBe(281); // 279 x + 1 emoji + 1 ellipsis
+    expect(/[\uD800-\uDFFF]/.test(out.normalize('NFC').replace(/😀/g, ''))).toBe(false); // no lone surrogate
+  });
 });
 
 describe('projectFields', () => {
@@ -113,6 +127,10 @@ describe('projectFields', () => {
   it('silently ignores unknown field names', () => {
     const t = tweet({ id: '1' });
     expect(projectFields(t, ['id', 'nope' as string])).toEqual({ id: '1' });
+  });
+
+  it('returns an empty object for an empty field list', () => {
+    expect(projectFields(tweet({ id: '1' }), [])).toEqual({});
   });
 
   it('exports the list of valid compact field names', () => {
