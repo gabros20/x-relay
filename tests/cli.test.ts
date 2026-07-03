@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'bun:test';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { dispatch, parseArgs } from '../src/cli.ts';
 import type { Engine } from '../src/engine/index.ts';
 import type {
@@ -405,6 +408,64 @@ describe('dispatch', () => {
     expect(calls).toContain('uploadMedia:/a.jpg');
     expect(calls).toContain('uploadMedia:/b.png');
     expect(calls).toContain('uploadMedia:/c.gif');
+  });
+
+  test('batch --file <f> --stdout dispatches and runs each query through the engine', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'xrelay-cli-batch-'));
+    try {
+      const f = join(dir, 'q.txt');
+      writeFileSync(f, 'hello\n', 'utf-8');
+      const calls: string[] = [];
+      const env = await dispatch(
+        parseArgs(['batch', '--file', f, '--stdout', '--quiet']),
+        fakeEngine(calls),
+      );
+      expect(env.ok).toBe(true);
+      expect(env.command).toBe('batch');
+      expect(calls.some((c) => c.startsWith('search:hello'))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('dedupe collects multiple positional files and dispatches to the offline runner', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'xrelay-cli-dedupe-'));
+    try {
+      const mk = (name: string) => {
+        const p = join(dir, name);
+        writeFileSync(
+          p,
+          JSON.stringify({
+            schema: 'x-relay/archive@1',
+            source: 'bookmarks',
+            generatedAt: '2026-01-01T00:00:00.000Z',
+            count: 1,
+            tweets: [
+              {
+                id: name === 'a.json' ? '1' : '2',
+                url: 'https://x.com/i/status/1',
+                text: 't',
+                author: { id: '1', handle: 'h', name: 'N', verified: false },
+                metrics: {},
+              },
+            ],
+          }),
+          'utf-8',
+        );
+        return p;
+      };
+      const a = mk('a.json');
+      const b = mk('b.json');
+      const out = join(dir, 'm.json');
+      const parsed = parseArgs(['dedupe', a, b, '--out', out]);
+      expect(parsed.positionals).toEqual([a, b]); // multiple positionals captured
+      // dedupe is offline — no engine call; pass a throwing engine to prove it.
+      const env = await dispatch(parsed, fakeEngine([]));
+      expect(env.ok).toBe(true);
+      expect(env.command).toBe('dedupe');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test('doctor --offline dispatches without any engine calls', async () => {

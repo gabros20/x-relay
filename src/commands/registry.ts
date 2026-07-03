@@ -168,6 +168,24 @@ export const COMMANDS: CommandDef[] = [
       '             For bookmarks --folder, archives tweets from a specific bookmark folder.',
   },
   {
+    name: 'batch',
+    cost: 'N calls — serialized',
+    summary:
+      'Run many searches from a query file, serialized with a delay, deduped by tweet id into one archive.',
+    usage:
+      'xrelay batch --file queries.txt (--out merged.json | --stdout)\n' +
+      '       [--delay 2000] [--limit N] [--product Top|Latest|Media|People] [--quiet]\n' +
+      '       One query per line; blank lines and # comments are skipped. Progress prints to stderr.',
+  },
+  {
+    name: 'dedupe',
+    cost: 'free — local files',
+    summary: 'Merge + dedupe search/archive output files by tweet id (offline; no network).',
+    usage:
+      'xrelay dedupe <file...> (--out merged.json | --stdout) [--sort engagement]\n' +
+      '       Accepts `xrelay search` envelopes and `xrelay archive`/`batch` files.',
+  },
+  {
     name: 'whoami',
     cost: '1 call',
     summary: 'The authenticated user (handle + profile).  Alias: status.',

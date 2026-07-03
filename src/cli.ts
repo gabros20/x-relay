@@ -5,15 +5,19 @@
 import type { CacheSort } from './cache/index.ts';
 import {
   type ArchiveCommandOpts,
+  type BatchOpts,
   type CacheViewOpts,
+  type DedupeOpts,
   type SearchCommandOpts,
   runArchive,
   runArticle,
+  runBatch,
   runBookmarkAdd,
   runBookmarkFolders,
   runBookmarks,
   runCommunity,
   runCommunityInfo,
+  runDedupe,
   runDelete,
   runDoctor,
   runFeed,
@@ -75,6 +79,8 @@ const VALUE_FLAGS = new Set([
   'folder',
   'image',
   'fields',
+  'file',
+  'delay',
 ]);
 const BOOL_FLAGS = new Set([
   'replies',
@@ -88,6 +94,7 @@ const BOOL_FLAGS = new Set([
   'confirm',
   'compact',
   'offline',
+  'quiet',
 ]);
 /** Single-dash aliases. */
 const SHORT_FLAGS: Record<string, string> = { q: 'query', i: 'image' };
@@ -253,6 +260,33 @@ function buildSearchOpts(parsed: ParsedArgs): SearchCommandOpts {
     ...(sort === 'engagement' ? { sort: 'engagement' } : {}),
     ...(parsed.bools.has('compact') ? { compact: true } : {}),
     ...(fields !== undefined ? { fields: parseFields(fields) } : {}),
+  };
+}
+
+function buildBatchOpts(parsed: ParsedArgs): BatchOpts {
+  const delay = num(parsed, 'delay');
+  const limit = num(parsed, 'limit');
+  const product = first(parsed, 'product');
+  return {
+    file: first(parsed, 'file') ?? '',
+    ...(delay !== undefined ? { delay } : {}),
+    ...(limit !== undefined ? { limit } : {}),
+    ...(product && PRODUCTS.has(product as SearchProduct)
+      ? { product: product as SearchProduct }
+      : {}),
+    ...(first(parsed, 'out') ? { out: first(parsed, 'out') } : {}),
+    ...(parsed.bools.has('stdout') ? { stdout: true } : {}),
+    ...(parsed.bools.has('quiet') ? { quiet: true } : {}),
+  };
+}
+
+function buildDedupeOpts(parsed: ParsedArgs): DedupeOpts {
+  const sort = first(parsed, 'sort');
+  return {
+    files: parsed.positionals,
+    ...(first(parsed, 'out') ? { out: first(parsed, 'out') } : {}),
+    ...(parsed.bools.has('stdout') ? { stdout: true } : {}),
+    ...(sort === 'engagement' ? { sort: 'engagement' } : {}),
   };
 }
 
@@ -456,6 +490,10 @@ export async function dispatch(parsed: ParsedArgs, engine: Engine): Promise<Enve
     }
     case 'archive':
       return runArchive(engine, buildArchiveOpts(parsed));
+    case 'batch':
+      return runBatch(engine, buildBatchOpts(parsed));
+    case 'dedupe':
+      return Promise.resolve(runDedupe(buildDedupeOpts(parsed)));
     case 'whoami':
     case 'status':
       return runWhoami(engine);

@@ -221,6 +221,8 @@ export interface ArchiveFile {
   newestId?: string;
   /** For search archives: the query string used. */
   query?: string;
+  /** For batch archives: the list of search queries that produced this file. */
+  queries?: string[];
   /** For user / my-posts / likes archives: the target @handle. */
   handle?: string;
   /** For list archives: the list id. */

@@ -56,3 +56,13 @@ export {
   type FollowResult,
 } from './runners.ts';
 export { buildSearchQuery, type SearchQueryFlags } from './query.ts';
+export {
+  runBatch,
+  runDedupe,
+  type BatchOpts,
+  type BatchDeps,
+  type BatchResult,
+  type BatchQueryResult,
+  type DedupeOpts,
+  type DedupeResult,
+} from './batch.ts';

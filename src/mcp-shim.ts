@@ -10,6 +10,7 @@ import { z } from 'zod';
 import {
   type SearchCommandOpts,
   runArticle,
+  runBatch,
   runBookmarks,
   runCommunity,
   runCommunityInfo,
@@ -347,6 +348,37 @@ function buildServer(): McpServer {
       },
     },
     async (a) => wrap(await runDoctor(getEngine(), { offline: Boolean(a.offline) })),
+  );
+
+  server.registerTool(
+    'batch',
+    {
+      description:
+        'Run MANY X searches from a query file, strictly serialized with a delay between calls, and merge the results — deduped by tweet id — into one archive file. One query per line; blank lines and # comments are skipped. Continue-on-error: a failed query is recorded and the run proceeds (a rate-limited query waits its retryAfterMs). Returns a summary {queries, succeeded, failed, totalUnique, out, perQuery}. `out` is required over MCP (the archive is written to disk, not streamed back).',
+      inputSchema: {
+        file: z.string().describe('path to a newline-delimited query file'),
+        out: z.string().describe('output archive file path (required)'),
+        delay: z
+          .number()
+          .int()
+          .nonnegative()
+          .describe('ms to sleep between queries (default 2000)')
+          .optional(),
+        limit: z.number().int().positive().describe('per-query result cap').optional(),
+        product: z.enum(['Top', 'Latest', 'Media', 'People']).optional(),
+      },
+    },
+    async (a) =>
+      wrap(
+        await runBatch(getEngine(), {
+          file: String(a.file ?? ''),
+          out: String(a.out ?? ''),
+          ...(a.delay !== undefined ? { delay: Number(a.delay) } : {}),
+          ...(a.limit !== undefined ? { limit: Number(a.limit) } : {}),
+          ...(a.product ? { product: a.product as SearchProduct } : {}),
+          quiet: true, // no stderr progress over the MCP stdio transport
+        }),
+      ),
   );
 
   return server;
