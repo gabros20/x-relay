@@ -17,6 +17,19 @@ delete). **No paid X API**: a from-scratch engine on X's private GraphQL surface
 The task is a search/fetch/rank pipeline. An agent shells out to `xrelay`, taught by the bundled `SKILL.md`.
 The MCP shim is provided for parity and non-CLI hosts.
 
+## Agent ergonomics
+
+- **`xrelay doctor [--offline]`** — run it first when a call prints nothing, errors oddly, or comes back empty.
+  It checks the install/entry, cookie resolution, live auth, and a test search, and reports what's actually
+  wrong. `--offline` diagnoses install/config with no network.
+- **Corpus building** — `xrelay batch --file queries.txt --out corpus.json` runs many query variants strictly
+  serialized (with a `--delay` between calls), deduped by tweet id into one archive; `xrelay dedupe <files…>
+  --out merged.json [--sort engagement]` merges/ranks passes offline. Don't fire parallel searches — serialize
+  with 2–5s gaps and respect `error.retryAfterMs` on `RATE_LIMITED`; `batch` handles that pacing for you.
+- **Compact search output** — `--compact` returns flat rows, `--fields a,b,c` projects chosen columns, and
+  `--sort engagement` ranks by `likes + replies*3 + bookmarks*2` — far cheaper on context for ranking passes.
+  Over MCP the `search` tool returns compact rows by default (`compact: false` for the full envelope).
+
 ## License
 
 MIT © Tamas Gabor
