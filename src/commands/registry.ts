@@ -175,7 +175,8 @@ export const COMMANDS: CommandDef[] = [
     usage:
       'xrelay batch --file queries.txt (--out merged.json | --stdout)\n' +
       '       [--delay 2000] [--limit N] [--product Top|Latest|Media|People] [--quiet]\n' +
-      '       One query per line; blank lines and # comments are skipped. Progress prints to stderr.',
+      '       One query per line; blank lines and # comments are skipped. Progress prints to stderr.\n' +
+      '       --out MERGES into an existing archive at that path (incremental).',
   },
   {
     name: 'dedupe',
@@ -183,7 +184,8 @@ export const COMMANDS: CommandDef[] = [
     summary: 'Merge + dedupe search/archive output files by tweet id (offline; no network).',
     usage:
       'xrelay dedupe <file...> (--out merged.json | --stdout) [--sort engagement]\n' +
-      '       Accepts `xrelay search` envelopes and `xrelay archive`/`batch` files.',
+      '       Accepts `xrelay search` envelopes and `xrelay archive`/`batch` files.\n' +
+      '       --out writes a FRESH archive from the listed inputs only (overwrites; does not merge).',
   },
   {
     name: 'whoami',

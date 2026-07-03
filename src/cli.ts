@@ -286,7 +286,9 @@ function buildDedupeOpts(parsed: ParsedArgs): DedupeOpts {
     files: parsed.positionals,
     ...(first(parsed, 'out') ? { out: first(parsed, 'out') } : {}),
     ...(parsed.bools.has('stdout') ? { stdout: true } : {}),
-    ...(sort === 'engagement' ? { sort: 'engagement' } : {}),
+    // Pass any --sort through raw; runDedupe rejects non-'engagement' loudly
+    // rather than silently dropping it.
+    ...(sort !== undefined ? { sort } : {}),
   };
 }
 

@@ -50,8 +50,8 @@ export interface BatchQueryResult {
   query: string;
   /** Raw tweets returned for this query (before cross-query dedupe). Absent on error. */
   count?: number;
-  /** Set instead of `count` when the query failed. */
-  error?: { code: string; retryAfterMs?: number };
+  /** Set instead of `count` when the query failed. `message` explains why. */
+  error?: { code: string; message: string; retryAfterMs?: number };
 }
 
 export interface BatchResult {
@@ -76,14 +76,15 @@ function parseQueryLines(raw: string): string[] {
 }
 
 /** Reduce an unknown throw into the compact error record stored per query. */
-function batchErrorRecord(e: unknown): { code: string; retryAfterMs?: number } {
+function batchErrorRecord(e: unknown): { code: string; message: string; retryAfterMs?: number } {
   if (e instanceof EngineError) {
     return {
       code: e.code,
+      message: e.message,
       ...(e.retryAfterMs !== undefined ? { retryAfterMs: e.retryAfterMs } : {}),
     };
   }
-  return { code: 'FETCH_FAILED' };
+  return { code: 'FETCH_FAILED', message: e instanceof Error ? e.message : String(e) };
 }
 
 function searchOpts(opts: BatchOpts): { product?: SearchProduct; limit?: number } {
@@ -217,8 +218,13 @@ export interface DedupeOpts {
   files: string[];
   out?: string;
   stdout?: boolean;
-  /** Rank the merged tweets by engagement score before writing. */
-  sort?: 'engagement';
+  /**
+   * Rank the merged tweets by engagement score before writing. Only 'engagement'
+   * is supported; any other value is rejected loudly (validated in runDedupe).
+   * Typed as string so an invalid value reaches the validator instead of being
+   * silently dropped at the CLI boundary.
+   */
+  sort?: string;
 }
 
 export interface DedupeResult {
@@ -265,6 +271,14 @@ function validateDedupeOpts(opts: DedupeOpts): Err | null {
   if (opts.files.length === 0) {
     return err('dedupe', 'INVALID_INPUT', 'provide one or more input files');
   }
+  if (opts.sort !== undefined && opts.sort !== 'engagement') {
+    return err(
+      'dedupe',
+      'INVALID_INPUT',
+      `invalid --sort '${opts.sort}' for dedupe`,
+      "the only supported dedupe sort is 'engagement'",
+    );
+  }
   return null;
 }
 
@@ -299,6 +313,9 @@ export function runDedupe(opts: DedupeOpts): Envelope<DedupeResult> {
     merged = sortByEngagement(merged as unknown as Tweet[]) as unknown as ArchiveTweet[];
   }
 
+  // Asymmetry with batch --out (intentional): dedupe writes a FRESH archive from
+  // exactly its listed inputs — existing=null, so --out is clobbered, not merged.
+  // batch --out loads and merges into any existing archive (incremental sweeps).
   const { file } = mergeArchive(null, merged, { generatedAt: new Date().toISOString() });
   file.source = 'search';
 

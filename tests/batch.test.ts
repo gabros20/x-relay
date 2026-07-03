@@ -132,6 +132,7 @@ describe('runBatch continue-on-error', () => {
     if (!env.ok) throw new Error('expected ok');
     expect(calls).toEqual(['a', 'b', 'c']); // c still ran after b failed
     expect(env.data.perQuery[1]?.error?.code).toBe('FETCH_FAILED');
+    expect(env.data.perQuery[1]?.error?.message).toBe('boom'); // why-it-failed surfaced
     expect(env.data.succeeded).toBe(2);
     expect(env.data.failed).toBe(1);
     expect(env.data.totalUnique).toBe(2);
@@ -151,7 +152,11 @@ describe('runBatch continue-on-error', () => {
     if (!env.ok) throw new Error('expected ok');
     // gap after a = delay; gap after b (rate-limited) = retryAfterMs.
     expect(sleep.calls).toEqual([2000, 5000]);
-    expect(env.data.perQuery[1]?.error).toEqual({ code: 'RATE_LIMITED', retryAfterMs: 5000 });
+    expect(env.data.perQuery[1]?.error).toEqual({
+      code: 'RATE_LIMITED',
+      message: 'slow down',
+      retryAfterMs: 5000,
+    });
     expect(calls).toContain('c');
   });
 });
@@ -201,7 +206,7 @@ describe('runBatch file handling', () => {
     expect(env.error.code).toBe('INVALID_INPUT');
   });
 
-  test('--out merges into an archive file on disk and records queries as provenance', async () => {
+  test('--out writes an archive file on disk and records queries as provenance', async () => {
     const calls: string[] = [];
     const out = join(tmp(), 'merged.json');
     const env = await runBatch(
@@ -215,6 +220,32 @@ describe('runBatch file handling', () => {
     expect(file.schema).toBe('x-relay/archive@1');
     expect(file.count).toBe(2);
     expect(file.queries).toEqual(['a', 'b']);
+  });
+
+  test('--out MERGES into a pre-existing archive (keeps prior tweets, adds new ones)', async () => {
+    const out = join(tmp(), 'merged.json');
+    // Pre-seed the archive with an unrelated tweet id (99) not returned by any query.
+    const seeded: ArchiveFile = {
+      schema: 'x-relay/archive@1',
+      source: 'bookmarks',
+      generatedAt: '2026-01-01T00:00:00.000Z',
+      count: 1,
+      tweets: [atw('99')],
+    };
+    writeFileSync(out, JSON.stringify(seeded), 'utf-8');
+
+    const env = await runBatch(
+      searchEngine({ a: [tw('1')], b: [tw('2')] }, []),
+      { file: queryFile(['a', 'b']), out, delay: 0 },
+      { sleep: sleepSpy().fn, progress: () => {} },
+    );
+    if (!env.ok) throw new Error('expected ok');
+    // This run collected 2 unique tweets…
+    expect(env.data.totalUnique).toBe(2);
+    // …but the on-disk file merges them with the seeded tweet → 3 total.
+    const file = JSON.parse(readFileSync(out, 'utf-8')) as ArchiveFile;
+    expect(file.count).toBe(3);
+    expect(file.tweets.map((t) => t.id).sort()).toEqual(['1', '2', '99']);
   });
 });
 
@@ -300,5 +331,14 @@ describe('runDedupe', () => {
     expect(env.ok).toBe(false);
     if (env.ok) throw new Error('expected err');
     expect(env.error.code).toBe('INVALID_INPUT');
+  });
+
+  test('an invalid --sort value → INVALID_INPUT (no silent no-op)', () => {
+    const s = searchEnvelopeFile([tw('1')]);
+    const env = runDedupe({ files: [s], stdout: true, sort: 'likes' });
+    expect(env.ok).toBe(false);
+    if (env.ok) throw new Error('expected err');
+    expect(env.error.code).toBe('INVALID_INPUT');
+    expect(env.error.message).toContain('likes');
   });
 });
