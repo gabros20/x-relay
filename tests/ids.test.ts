@@ -67,6 +67,10 @@ describe('looksLikeTweetRef', () => {
   test('false for a non-X URL', () => {
     expect(looksLikeTweetRef('https://example.com/status/123')).toBe(false);
   });
+
+  test('false for empty input', () => {
+    expect(looksLikeTweetRef('')).toBe(false);
+  });
 });
 
 describe('extractHandle', () => {
