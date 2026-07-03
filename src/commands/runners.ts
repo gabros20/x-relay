@@ -16,6 +16,13 @@ import {
 } from '../cache/index.ts';
 import { type Engine, EngineError } from '../engine/index.ts';
 import type { SearchProduct } from '../engine/ops.ts';
+import {
+  COMPACT_FIELDS,
+  type CompactTweet,
+  compactTweet,
+  projectFields,
+  sortByEngagement,
+} from '../format.ts';
 import { extractTweetId, looksLikeTweetRef } from '../ids.ts';
 import { err, ok } from '../output.ts';
 import { parseTwitterDateMs } from '../time.ts';
@@ -121,20 +128,91 @@ export interface SearchCommandOpts extends Omit<SearchQueryFlags, 'query'> {
   query: string;
   limit?: number;
   product?: SearchProduct;
+  /** Rank the returned tweets by engagement score (post-fetch). */
+  sort?: 'engagement';
+  /** Replace each tweet with its flat, context-cheap compact shape. */
+  compact?: boolean;
+  /** Project each tweet down to these compact field names. */
+  fields?: string[];
+}
+
+/**
+ * A search result whose tweets have been compacted or field-projected. Carries a
+ * `compact: true` marker so an agent can tell the shape changed. Mutually
+ * exclusive with the untransformed `SearchResult`.
+ */
+export type CompactSearchResult = Omit<SearchResult, 'tweets'> & {
+  tweets: Array<CompactTweet | Partial<CompactTweet>>;
+  compact: true;
+};
+
+/**
+ * Validate the output-mode flags before any network call. `--compact` and
+ * `--fields` are mutually exclusive, and every `--fields` name must be a known
+ * compact field. Returns an INVALID_INPUT envelope on violation, else null.
+ */
+function validateSearchOutputMode(opts: SearchCommandOpts): Envelope<never> | null {
+  const hasFields = opts.fields !== undefined && opts.fields.length > 0;
+  if (opts.compact && hasFields) {
+    return err(
+      'search',
+      'INVALID_INPUT',
+      '--compact and --fields are mutually exclusive',
+      'pass one output mode, not both',
+    );
+  }
+  if (hasFields) {
+    const valid = COMPACT_FIELDS as readonly string[];
+    const unknown = (opts.fields as string[]).filter((f) => !valid.includes(f));
+    if (unknown.length > 0) {
+      return err(
+        'search',
+        'INVALID_INPUT',
+        `unknown --fields: ${unknown.join(', ')}`,
+        `valid fields: ${COMPACT_FIELDS.join(', ')}`,
+      );
+    }
+  }
+  return null;
+}
+
+/**
+ * Apply the post-fetch output pipeline: sort first, then compact/project.
+ * With no output-mode flag the SearchResult is returned untouched (byte-identical).
+ */
+function applySearchOutputMode(
+  result: SearchResult,
+  opts: SearchCommandOpts,
+): SearchResult | CompactSearchResult {
+  const hasFields = opts.fields !== undefined && opts.fields.length > 0;
+  if (opts.sort === undefined && !opts.compact && !hasFields) return result;
+
+  const tweets = opts.sort === 'engagement' ? sortByEngagement(result.tweets) : result.tweets;
+  if (opts.compact) {
+    return { ...result, tweets: tweets.map(compactTweet), compact: true };
+  }
+  if (hasFields) {
+    const fields = opts.fields as string[];
+    return { ...result, tweets: tweets.map((t) => projectFields(t, fields)), compact: true };
+  }
+  return { ...result, tweets };
 }
 
 export function runSearch(
   engine: Engine,
   opts: SearchCommandOpts,
-): Promise<Envelope<SearchResult>> {
+): Promise<Envelope<SearchResult | CompactSearchResult>> {
   const raw = buildSearchQuery(opts);
   if (!raw) return Promise.resolve(err('search', 'INVALID_INPUT', 'empty query'));
-  return guard('search', () =>
-    engine.search(raw, {
+  const modeErr = validateSearchOutputMode(opts);
+  if (modeErr) return Promise.resolve(modeErr);
+  return guard('search', async () => {
+    const result = await engine.search(raw, {
       ...(opts.product ? { product: opts.product } : {}),
       ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
-    }),
-  );
+    });
+    return applySearchOutputMode(result, opts);
+  });
 }
 
 export function runUser(engine: Engine, handle: string): Promise<Envelope<UserProfile | null>> {

@@ -17,7 +17,8 @@ export const COMMANDS: CommandDef[] = [
     usage:
       'xrelay search "<query>" [--limit N] [--product Top|Latest|Media|People]\n' +
       '       [--from <h>] [--to <h>] [--since YYYY-MM-DD] [--until YYYY-MM-DD]\n' +
-      '       [--lang xx] [--min-faves N] [--min-retweets N] [--filter media|links|replies|-replies ...]',
+      '       [--lang xx] [--min-faves N] [--min-retweets N] [--filter media|links|replies|-replies ...]\n' +
+      '       [--sort engagement] [--compact | --fields a,b,c]',
   },
   {
     name: 'user',

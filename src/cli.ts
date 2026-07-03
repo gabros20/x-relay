@@ -73,6 +73,7 @@ const VALUE_FLAGS = new Set([
   'type',
   'folder',
   'image',
+  'fields',
 ]);
 const BOOL_FLAGS = new Set([
   'replies',
@@ -84,6 +85,7 @@ const BOOL_FLAGS = new Set([
   'stdout',
   'following',
   'confirm',
+  'compact',
 ]);
 /** Single-dash aliases. */
 const SHORT_FLAGS: Record<string, string> = { q: 'query', i: 'image' };
@@ -228,25 +230,27 @@ function helpText(): string {
   return lines.join('\n');
 }
 
+/** Split a `--fields a, b ,c` value into trimmed, non-empty field names. */
+function parseFields(raw: string): string[] {
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
 function buildSearchOpts(parsed: ParsedArgs): SearchCommandOpts {
-  const product = first(parsed, 'product');
   const limit = num(parsed, 'limit');
-  const minFaves = num(parsed, 'min-faves');
-  const minRetweets = num(parsed, 'min-retweets');
+  const sort = first(parsed, 'sort');
+  const fields = first(parsed, 'fields');
   return {
     query: parsed.positionals.join(' '),
     ...(limit !== undefined ? { limit } : {}),
-    ...(product && PRODUCTS.has(product as SearchProduct)
-      ? { product: product as SearchProduct }
-      : {}),
-    ...(first(parsed, 'from') ? { from: first(parsed, 'from') } : {}),
-    ...(first(parsed, 'to') ? { to: first(parsed, 'to') } : {}),
-    ...(first(parsed, 'since') ? { since: first(parsed, 'since') } : {}),
-    ...(first(parsed, 'until') ? { until: first(parsed, 'until') } : {}),
-    ...(first(parsed, 'lang') ? { lang: first(parsed, 'lang') } : {}),
-    ...(minFaves !== undefined ? { minFaves } : {}),
-    ...(minRetweets !== undefined ? { minRetweets } : {}),
-    ...(parsed.flags.filter ? { filter: parsed.flags.filter } : {}),
+    ...parseSearchFlags(parsed),
+    // Live search supports only engagement ranking; invalid values are rejected
+    // by the search dispatch before this runs, so any other value never arrives.
+    ...(sort === 'engagement' ? { sort: 'engagement' } : {}),
+    ...(parsed.bools.has('compact') ? { compact: true } : {}),
+    ...(fields !== undefined ? { fields: parseFields(fields) } : {}),
   };
 }
 
@@ -379,6 +383,26 @@ function dispatchWriteOps(
   }
 }
 
+/**
+ * Dispatch the live `search` command. Live search ranks only by engagement, so
+ * any other --sort value is rejected loudly (the cache SORTS set is separate and
+ * must not leak into live search).
+ */
+function dispatchSearch(parsed: ParsedArgs, engine: Engine): Promise<Envelope<unknown>> {
+  const sortFlag = first(parsed, 'sort');
+  if (sortFlag !== undefined && sortFlag !== 'engagement') {
+    return Promise.resolve(
+      err(
+        'search',
+        'INVALID_INPUT',
+        `invalid --sort '${sortFlag}' for live search`,
+        "the only supported live-search sort is 'engagement'",
+      ),
+    );
+  }
+  return runSearch(engine, buildSearchOpts(parsed));
+}
+
 /** Dispatch parsed args against an engine. Returns an envelope (does not print). */
 export async function dispatch(parsed: ParsedArgs, engine: Engine): Promise<Envelope<unknown>> {
   const { command } = parsed;
@@ -386,7 +410,7 @@ export async function dispatch(parsed: ParsedArgs, engine: Engine): Promise<Enve
 
   switch (command) {
     case 'search':
-      return runSearch(engine, buildSearchOpts(parsed));
+      return dispatchSearch(parsed, engine);
     case 'user':
       return runUser(engine, extractHandle(target) ?? target);
     case 'user-posts':

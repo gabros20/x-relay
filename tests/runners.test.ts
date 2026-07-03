@@ -9,6 +9,7 @@ import {
   runQuote,
   runReply,
   runRetweet,
+  runSearch,
   runThread,
   runUnbookmark,
   runUnfollow,
@@ -17,6 +18,7 @@ import {
 } from '../src/commands/runners.ts';
 import type { Engine } from '../src/engine/index.ts';
 import { EngineError } from '../src/engine/index.ts';
+import type { SearchResult, Tweet } from '../src/types.ts';
 
 describe('requireConfirmation (destructive-write guard)', () => {
   test('blocks with a CONFIRMATION_REQUIRED envelope when not confirmed', () => {
@@ -754,5 +756,122 @@ describe('runQuote with imagePaths', () => {
     expect(uploadedPaths).toEqual(['/q.webp']);
     expect(capturedOpts?.quoteTweetId).toBe('55544433');
     expect(capturedOpts?.mediaIds).toEqual(['qid-/q.webp']);
+  });
+});
+
+// ── runSearch output modes (--sort engagement / --compact / --fields) ─────────
+
+/** Minimal Tweet factory — only the fields format.ts reads matter. */
+function searchTweet(over: Partial<Tweet> & { id: string }): Tweet {
+  return {
+    url: `https://x.com/u/status/${over.id}`,
+    text: 'hello',
+    author: {
+      id: `a${over.id}`,
+      handle: `user${over.id}`,
+      name: `User ${over.id}`,
+      verified: false,
+    },
+    metrics: {},
+    ...over,
+  } as Tweet;
+}
+
+/** Engine stub whose search() returns a fixed tweet set as a SearchResult. */
+function fakeSearchEngine(tweets: Tweet[]): Engine {
+  return {
+    search: async (query: string, opts?: { product?: string }): Promise<SearchResult> => ({
+      query,
+      product: (opts?.product ?? 'Top') as SearchResult['product'],
+      tweets,
+    }),
+  } as unknown as Engine;
+}
+
+describe('runSearch output modes', () => {
+  // Scores: A = 10, B = 5*3 = 15, C = 3*2 = 6 → engagement order B, A, C.
+  const tweets = (): Tweet[] => [
+    searchTweet({ id: 'A', metrics: { likes: 10 } }),
+    searchTweet({ id: 'B', metrics: { replies: 5 } }),
+    searchTweet({ id: 'C', metrics: { bookmarks: 3 } }),
+  ];
+
+  test('sort=engagement orders tweets by likes+replies*3+bookmarks*2 desc', async () => {
+    const env = await runSearch(fakeSearchEngine(tweets()), { query: 'x', sort: 'engagement' });
+    expect(env.ok).toBe(true);
+    if (!env.ok) throw new Error('expected success');
+    expect(env.data.tweets.map((t) => (t as Tweet).id)).toEqual(['B', 'A', 'C']);
+    // sort-only leaves the shape untouched — no compact marker.
+    expect('compact' in env.data).toBe(false);
+  });
+
+  test('compact returns flat compact tweets and a data.compact marker', async () => {
+    const env = await runSearch(fakeSearchEngine(tweets()), { query: 'x', compact: true });
+    expect(env.ok).toBe(true);
+    if (!env.ok) throw new Error('expected success');
+    expect((env.data as { compact?: boolean }).compact).toBe(true);
+    const first = env.data.tweets[0] as Record<string, unknown>;
+    expect(first.handle).toBe('userA');
+    expect(first.likes).toBe(10);
+    // flattened — no nested author/metrics objects
+    expect('author' in first).toBe(false);
+    expect('metrics' in first).toBe(false);
+  });
+
+  test('compact + sort=engagement sorts first, then compacts', async () => {
+    const env = await runSearch(fakeSearchEngine(tweets()), {
+      query: 'x',
+      sort: 'engagement',
+      compact: true,
+    });
+    expect(env.ok).toBe(true);
+    if (!env.ok) throw new Error('expected success');
+    expect(env.data.tweets.map((t) => (t as { id: string }).id)).toEqual(['B', 'A', 'C']);
+  });
+
+  test('fields projects only the requested keys', async () => {
+    const env = await runSearch(fakeSearchEngine(tweets()), {
+      query: 'x',
+      fields: ['id', 'likes'],
+    });
+    expect(env.ok).toBe(true);
+    if (!env.ok) throw new Error('expected success');
+    expect((env.data as { compact?: boolean }).compact).toBe(true);
+    expect(env.data.tweets[0]).toEqual({ id: 'A', likes: 10 });
+  });
+
+  test('compact + fields together → INVALID_INPUT', async () => {
+    const env = await runSearch(fakeSearchEngine(tweets()), {
+      query: 'x',
+      compact: true,
+      fields: ['id'],
+    });
+    expect(env.ok).toBe(false);
+    if (env.ok) throw new Error('expected failure');
+    expect(env.error.code).toBe('INVALID_INPUT');
+  });
+
+  test('unknown field name → INVALID_INPUT listing the valid names', async () => {
+    const env = await runSearch(fakeSearchEngine(tweets()), {
+      query: 'x',
+      fields: ['id', 'nope'],
+    });
+    expect(env.ok).toBe(false);
+    if (env.ok) throw new Error('expected failure');
+    expect(env.error.code).toBe('INVALID_INPUT');
+    expect(env.error.message).toContain('nope');
+    // the valid field names are surfaced (message or hint)
+    const blob = `${env.error.message} ${env.error.hint ?? ''}`;
+    expect(blob).toContain('handle');
+    expect(blob).toContain('likes');
+  });
+
+  test('no output-mode flags → untransformed SearchResult (no compact marker)', async () => {
+    const env = await runSearch(fakeSearchEngine(tweets()), { query: 'x' });
+    expect(env.ok).toBe(true);
+    if (!env.ok) throw new Error('expected success');
+    expect('compact' in env.data).toBe(false);
+    // full Tweet shape retained (nested author present)
+    expect((env.data.tweets[0] as Tweet).author.handle).toBe('userA');
   });
 });

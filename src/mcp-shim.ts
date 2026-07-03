@@ -8,6 +8,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import {
+  type SearchCommandOpts,
   runArticle,
   runBookmarks,
   runCommunity,
@@ -49,6 +50,35 @@ function wrap(envelope: Envelope<unknown>): ToolResult {
   return result;
 }
 
+/**
+ * Map the MCP search tool args to SearchCommandOpts. `compact` defaults true
+ * (agents want slim output), but `--fields` and `--compact` are mutually
+ * exclusive — when fields is given we forward fields and drop the implicit compact.
+ */
+function buildMcpSearchOpts(args: Record<string, unknown>): SearchCommandOpts {
+  const useFields = Array.isArray(args.fields) && args.fields.length > 0;
+  const outputMode = useFields
+    ? { fields: (args.fields as string[]).map(String) }
+    : args.compact
+      ? { compact: true }
+      : {};
+  return {
+    query: String(args.query ?? ''),
+    ...(args.limit !== undefined ? { limit: Number(args.limit) } : {}),
+    ...(args.product ? { product: args.product as SearchProduct } : {}),
+    ...(args.from ? { from: String(args.from) } : {}),
+    ...(args.to ? { to: String(args.to) } : {}),
+    ...(args.since ? { since: String(args.since) } : {}),
+    ...(args.until ? { until: String(args.until) } : {}),
+    ...(args.lang ? { lang: String(args.lang) } : {}),
+    ...(args.minFaves !== undefined ? { minFaves: Number(args.minFaves) } : {}),
+    ...(args.minRetweets !== undefined ? { minRetweets: Number(args.minRetweets) } : {}),
+    ...(Array.isArray(args.filter) ? { filter: args.filter.map(String) } : {}),
+    ...(args.sort ? { sort: args.sort as 'engagement' } : {}),
+    ...outputMode,
+  };
+}
+
 function buildServer(): McpServer {
   const require = createRequire(import.meta.url);
   // biome-ignore lint/suspicious/noExplicitAny: dynamic require of package.json
@@ -59,7 +89,7 @@ function buildServer(): McpServer {
     'search',
     {
       description:
-        'Live X/Twitter search — the wide net. Returns enriched tweet summaries (author, verified, likes/retweets/replies/quotes/bookmarks, views, date). Rank on this metadata before reading threads.',
+        'Live X/Twitter search — the wide net. By DEFAULT (compact=true) returns slim, flat tweet rows {id,url,handle,name,date,text,likes,replies,bookmarks,views} plus a compact:true marker — far cheaper on context. Set compact=false for the full enriched envelope (nested author + all metrics). Use fields=[...] to project only the columns you need (mutually exclusive with compact). sort="engagement" ranks by likes+replies*3+bookmarks*2. Rank on this metadata before reading threads.',
       inputSchema: {
         query: z.string().describe('search text; X advanced operators inside the string also work'),
         limit: z.number().int().positive().optional(),
@@ -72,24 +102,18 @@ function buildServer(): McpServer {
         minFaves: z.number().int().nonnegative().optional(),
         minRetweets: z.number().int().nonnegative().optional(),
         filter: z.array(z.string()).describe('e.g. media, links, -replies').optional(),
+        sort: z.enum(['engagement']).describe('rank by engagement score, desc').optional(),
+        compact: z
+          .boolean()
+          .describe('flat, context-cheap tweet rows (default true)')
+          .default(true),
+        fields: z
+          .array(z.string())
+          .describe('project only these compact fields; overrides compact')
+          .optional(),
       },
     },
-    async (args) =>
-      wrap(
-        await runSearch(getEngine(), {
-          query: String(args.query ?? ''),
-          ...(args.limit !== undefined ? { limit: Number(args.limit) } : {}),
-          ...(args.product ? { product: args.product as SearchProduct } : {}),
-          ...(args.from ? { from: String(args.from) } : {}),
-          ...(args.to ? { to: String(args.to) } : {}),
-          ...(args.since ? { since: String(args.since) } : {}),
-          ...(args.until ? { until: String(args.until) } : {}),
-          ...(args.lang ? { lang: String(args.lang) } : {}),
-          ...(args.minFaves !== undefined ? { minFaves: Number(args.minFaves) } : {}),
-          ...(args.minRetweets !== undefined ? { minRetweets: Number(args.minRetweets) } : {}),
-          ...(Array.isArray(args.filter) ? { filter: args.filter.map(String) } : {}),
-        }),
-      ),
+    async (args) => wrap(await runSearch(getEngine(), buildMcpSearchOpts(args))),
   );
 
   server.registerTool(

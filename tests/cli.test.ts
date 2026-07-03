@@ -250,6 +250,54 @@ describe('dispatch', () => {
     expect(calls).toHaveLength(0);
   });
 
+  test('search --compact reaches the runner and marks the output compact', async () => {
+    const calls: string[] = [];
+    const env = await dispatch(parseArgs(['search', 'ai', '--compact']), fakeEngine(calls));
+    expect(env.ok).toBe(true);
+    if (!env.ok) throw new Error('expected success');
+    expect((env.data as { compact?: boolean }).compact).toBe(true);
+  });
+
+  test('search --fields x,y reaches the runner and marks the output compact', async () => {
+    const calls: string[] = [];
+    const env = await dispatch(
+      parseArgs(['search', 'ai', '--fields', 'id,likes']),
+      fakeEngine(calls),
+    );
+    expect(env.ok).toBe(true);
+    if (!env.ok) throw new Error('expected success');
+    expect((env.data as { compact?: boolean }).compact).toBe(true);
+  });
+
+  test('search --sort engagement is accepted (shape untouched, no compact marker)', async () => {
+    const calls: string[] = [];
+    const env = await dispatch(
+      parseArgs(['search', 'ai', '--sort', 'engagement']),
+      fakeEngine(calls),
+    );
+    expect(env.ok).toBe(true);
+    if (!env.ok) throw new Error('expected success');
+    expect('compact' in env.data).toBe(false);
+    expect(calls[0]).toBe('search:ai:-:-');
+  });
+
+  test('search with an invalid --sort value → INVALID_INPUT', async () => {
+    const calls: string[] = [];
+    const env = await dispatch(parseArgs(['search', 'ai', '--sort', 'foo']), fakeEngine(calls));
+    expect(env.ok).toBe(false);
+    if (env.ok) throw new Error('expected failure');
+    expect(env.error.code).toBe('INVALID_INPUT');
+    expect(calls).toHaveLength(0);
+  });
+
+  test('cache bookmarks --sort likes still routes to the cache runner (regression)', async () => {
+    const calls: string[] = [];
+    const env = await dispatch(parseArgs(['bookmarks', '--sort', 'likes']), fakeEngine(calls));
+    // Cache read (not --live): the engine.bookmarks() live path must NOT fire.
+    expect(env.ok).toBe(true);
+    expect(calls.every((c) => !c.startsWith('bookmarks:'))).toBe(true);
+  });
+
   test('like / unlike / bookmark / unbookmark dispatch to correct engine methods', async () => {
     const calls: string[] = [];
     const eng = fakeEngine(calls);
