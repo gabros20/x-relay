@@ -406,6 +406,25 @@ describe('dispatch', () => {
     expect(calls).toContain('uploadMedia:/b.png');
     expect(calls).toContain('uploadMedia:/c.gif');
   });
+
+  test('doctor --offline dispatches without any engine calls', async () => {
+    // Provide cookies via env so the doctor cookie check never touches the Keychain.
+    const saved = process.env.XRELAY_COOKIES;
+    process.env.XRELAY_COOKIES = 'auth_token=x; ct0=y';
+    try {
+      const calls: string[] = [];
+      const env = await dispatch(parseArgs(['doctor', '--offline']), fakeEngine(calls));
+      expect(env.ok).toBe(true);
+      if (!env.ok) throw new Error('expected Ok envelope');
+      expect(env.command).toBe('doctor');
+      // --offline performs no live checks, so the fakeEngine is untouched.
+      expect(calls).toHaveLength(0);
+    } finally {
+      // biome-ignore lint/performance/noDelete: env cleanup — assigning undefined would stringify to "undefined"
+      if (saved === undefined) delete process.env.XRELAY_COOKIES;
+      else process.env.XRELAY_COOKIES = saved;
+    }
+  });
 });
 
 describe('parseArgs --image / -i', () => {

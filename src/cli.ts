@@ -15,6 +15,7 @@ import {
   runCommunity,
   runCommunityInfo,
   runDelete,
+  runDoctor,
   runFeed,
   runFollow,
   runFollowers,
@@ -86,6 +87,7 @@ const BOOL_FLAGS = new Set([
   'following',
   'confirm',
   'compact',
+  'offline',
 ]);
 /** Single-dash aliases. */
 const SHORT_FLAGS: Record<string, string> = { q: 'query', i: 'image' };
@@ -457,6 +459,8 @@ export async function dispatch(parsed: ParsedArgs, engine: Engine): Promise<Enve
     case 'whoami':
     case 'status':
       return runWhoami(engine);
+    case 'doctor':
+      return runDoctor(engine, { offline: parsed.bools.has('offline') });
     default:
       return (
         dispatchReadOps(parsed, engine, command, target) ??

@@ -33,6 +33,9 @@ export {
   runTrends,
   runArticle,
   runMedia,
+  runDoctor,
+  type DoctorReport,
+  type DoctorCheck,
   buildSearchQuery,
 } from './commands/index.ts';
 export { parseArgs, dispatch, run } from './cli.ts';

@@ -13,6 +13,7 @@ import {
   runBookmarks,
   runCommunity,
   runCommunityInfo,
+  runDoctor,
   runFollowers,
   runFollowing,
   runLikers,
@@ -332,6 +333,20 @@ function buildServer(): McpServer {
       inputSchema: { communityId: z.string() },
     },
     async (a) => wrap(await runCommunityInfo(getEngine(), String(a.communityId ?? ''))),
+  );
+  server.registerTool(
+    'doctor',
+    {
+      description:
+        'Diagnose setup: entry/symlink, cookie resolution, live auth (whoami) + a 1-result test search, and usage guidance. Run this first when calls return empty or fail. offline=true skips the two live checks (no network calls).',
+      inputSchema: {
+        offline: z
+          .boolean()
+          .describe('skip the live auth + search checks (no network calls)')
+          .optional(),
+      },
+    },
+    async (a) => wrap(await runDoctor(getEngine(), { offline: Boolean(a.offline) })),
   );
 
   return server;

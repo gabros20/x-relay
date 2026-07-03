@@ -1,5 +1,12 @@
 export { COMMANDS, commandNames, type CommandDef } from './registry.ts';
 export {
+  runDoctor,
+  type DoctorOpts,
+  type DoctorDeps,
+  type DoctorCheck,
+  type DoctorReport,
+} from './doctor.ts';
+export {
   runSearch,
   runUser,
   runUserPosts,

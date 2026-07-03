@@ -174,6 +174,12 @@ export const COMMANDS: CommandDef[] = [
     usage: 'xrelay whoami',
   },
   {
+    name: 'doctor',
+    cost: '2 calls (0 with --offline)',
+    summary: 'Diagnose setup: entry/symlink, cookies, auth, live search, usage guidance.',
+    usage: 'xrelay doctor [--offline]   # --offline skips the live auth + search checks',
+  },
+  {
     name: 'post',
     cost: '1 call — write',
     summary: 'Post a new tweet. Returns the created tweet id and URL.',
