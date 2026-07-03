@@ -10,7 +10,15 @@ export type Ok<T> = { ok: true; command: string; data: T };
 export type Err = {
   ok: false;
   command: string;
-  error: { code: string; message: string; hint?: string };
+  error: {
+    code: string;
+    message: string;
+    hint?: string;
+    /** HTTP status from the transport layer, when the error originated there. */
+    status?: number;
+    /** For RATE_LIMITED: ms the caller should wait before retrying. */
+    retryAfterMs?: number;
+  };
 };
 
 export type Envelope<T> = Ok<T> | Err;
@@ -213,6 +221,8 @@ export interface ArchiveFile {
   newestId?: string;
   /** For search archives: the query string used. */
   query?: string;
+  /** For batch archives: the list of search queries that produced this file. */
+  queries?: string[];
   /** For user / my-posts / likes archives: the target @handle. */
   handle?: string;
   /** For list archives: the list id. */

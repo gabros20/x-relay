@@ -16,6 +16,14 @@ import {
 } from '../cache/index.ts';
 import { type Engine, EngineError } from '../engine/index.ts';
 import type { SearchProduct } from '../engine/ops.ts';
+import {
+  COMPACT_FIELDS,
+  type CompactTweet,
+  compactTweet,
+  projectFields,
+  sortByEngagement,
+} from '../format.ts';
+import { extractTweetId, looksLikeTweetRef } from '../ids.ts';
 import { err, ok } from '../output.ts';
 import { parseTwitterDateMs } from '../time.ts';
 import type {
@@ -43,11 +51,38 @@ async function guard<T>(command: string, fn: () => Promise<T>): Promise<Envelope
           ? 'Re-log into x.com in your browser, or set XRELAY_COOKIES.'
           : e.code === 'FEATURE_DRIFT'
             ? 'X rotated its API; refresh the query-ids/features in src/engine/ops.ts.'
-            : undefined;
-      return err(command, e.code, e.message, hint);
+            : e.code === 'RATE_LIMITED'
+              ? 'rate limited — wait retryAfterMs before retrying; serialize queries with 2-5s gaps'
+              : undefined;
+      return err(command, e.code, e.message, hint, e.status, e.retryAfterMs);
     }
     return err(command, 'FETCH_FAILED', e instanceof Error ? e.message : String(e));
   }
+}
+
+/**
+ * Resolve a raw tweet reference (bare snowflake or status URL) to its numeric
+ * id, or return an INVALID_INPUT error envelope. The engine is NEVER called with
+ * an unparseable reference — validation lives here so every tweet-id runner
+ * shares one definition. Callers pass the RAW user input.
+ *
+ * Returns the extracted id on success, or an Err envelope on failure (the caller
+ * discriminates with `typeof resolved === 'string'`).
+ */
+function resolveTweetIdOrErr(command: string, input: string): string | Envelope<never> {
+  const id = extractTweetId(input);
+  if (id !== null) return id;
+  // looksLikeTweetRef is true for an X-host URL even when extraction fails, so
+  // here it distinguishes a malformed X URL from plain non-tweet garbage.
+  const detail = looksLikeTweetRef(input)
+    ? 'the X URL has no /status/<id> segment'
+    : 'not a tweet id or X URL';
+  return err(
+    command,
+    'INVALID_INPUT',
+    `could not extract a tweet id from '${input}' (${detail})`,
+    'pass a snowflake ID or a URL containing /status/<id>',
+  );
 }
 
 // ── destructive-write confirmation guard (convention for T8–T10) ─────────────
@@ -93,20 +128,103 @@ export interface SearchCommandOpts extends Omit<SearchQueryFlags, 'query'> {
   query: string;
   limit?: number;
   product?: SearchProduct;
+  /** Rank the returned tweets by engagement score (post-fetch). */
+  sort?: 'engagement';
+  /** Replace each tweet with its flat, context-cheap compact shape. */
+  compact?: boolean;
+  /** Project each tweet down to these compact field names. */
+  fields?: string[];
+}
+
+/**
+ * A search result whose tweets have been compacted or field-projected. Carries a
+ * `compact: true` marker so an agent can tell the shape changed. Mutually
+ * exclusive with the untransformed `SearchResult`.
+ */
+export type CompactSearchResult = Omit<SearchResult, 'tweets'> & {
+  tweets: Array<CompactTweet | Partial<CompactTweet>>;
+  compact: true;
+};
+
+/**
+ * Validate the output-mode flags before any network call. `--compact` and
+ * `--fields` are mutually exclusive; a `--fields` that was passed but resolved to
+ * no valid names is an error (never a silent no-op); and every `--fields` name
+ * must be a known compact field. Returns an INVALID_INPUT envelope on violation,
+ * else null. `fields` being an empty array means the flag was given but empty —
+ * distinct from `fields` being undefined (flag absent).
+ */
+function validateSearchOutputMode(opts: SearchCommandOpts): Envelope<never> | null {
+  const fieldsGiven = opts.fields !== undefined;
+  if (opts.compact && fieldsGiven) {
+    return err(
+      'search',
+      'INVALID_INPUT',
+      '--compact and --fields are mutually exclusive',
+      'pass one output mode, not both',
+    );
+  }
+  if (fieldsGiven) {
+    const fields = opts.fields as string[];
+    if (fields.length === 0) {
+      return err(
+        'search',
+        'INVALID_INPUT',
+        '--fields given but no valid field names',
+        `valid fields: ${COMPACT_FIELDS.join(', ')}`,
+      );
+    }
+    const valid = COMPACT_FIELDS as readonly string[];
+    const unknown = fields.filter((f) => !valid.includes(f));
+    if (unknown.length > 0) {
+      return err(
+        'search',
+        'INVALID_INPUT',
+        `unknown --fields: ${unknown.join(', ')}`,
+        `valid fields: ${COMPACT_FIELDS.join(', ')}`,
+      );
+    }
+  }
+  return null;
+}
+
+/**
+ * Apply the post-fetch output pipeline: sort first, then compact/project.
+ * With no output-mode flag the SearchResult is returned untouched (byte-identical).
+ */
+function applySearchOutputMode(
+  result: SearchResult,
+  opts: SearchCommandOpts,
+): SearchResult | CompactSearchResult {
+  const hasFields = opts.fields !== undefined && opts.fields.length > 0;
+  if (opts.sort === undefined && !opts.compact && !hasFields) return result;
+
+  const tweets = opts.sort === 'engagement' ? sortByEngagement(result.tweets) : result.tweets;
+  if (opts.compact) {
+    return { ...result, tweets: tweets.map(compactTweet), compact: true };
+  }
+  if (hasFields) {
+    const fields = opts.fields as string[];
+    return { ...result, tweets: tweets.map((t) => projectFields(t, fields)), compact: true };
+  }
+  return { ...result, tweets };
 }
 
 export function runSearch(
   engine: Engine,
   opts: SearchCommandOpts,
-): Promise<Envelope<SearchResult>> {
+): Promise<Envelope<SearchResult | CompactSearchResult>> {
   const raw = buildSearchQuery(opts);
   if (!raw) return Promise.resolve(err('search', 'INVALID_INPUT', 'empty query'));
-  return guard('search', () =>
-    engine.search(raw, {
+  const modeErr = validateSearchOutputMode(opts);
+  if (modeErr) return Promise.resolve(modeErr);
+  return guard('search', async () => {
+    const result = await engine.search(raw, {
       ...(opts.product ? { product: opts.product } : {}),
       ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
-    }),
-  );
+    });
+    return applySearchOutputMode(result, opts);
+  });
 }
 
 export function runUser(engine: Engine, handle: string): Promise<Envelope<UserProfile | null>> {
@@ -141,9 +259,10 @@ export function runUserPosts(
   );
 }
 
-export function runThread(engine: Engine, id: string): Promise<Envelope<ThreadResult>> {
-  if (!id) return Promise.resolve(err('thread', 'INVALID_INPUT', 'missing tweet id/url'));
-  return guard('thread', () => engine.thread(id));
+export function runThread(engine: Engine, input: string): Promise<Envelope<ThreadResult>> {
+  const resolved = resolveTweetIdOrErr('thread', input);
+  if (typeof resolved !== 'string') return Promise.resolve(resolved);
+  return guard('thread', () => engine.thread(resolved));
 }
 
 // ── more read endpoints (timelines / users / trends / article / media) ───────
@@ -170,14 +289,16 @@ export function runFollowing(engine: Engine, handle: string, limit?: number) {
   return guard('following', () => engine.following(handle, lim(limit)));
 }
 
-export function runRetweeters(engine: Engine, tweetId: string, limit?: number) {
-  if (!tweetId) return Promise.resolve(err('retweeters', 'INVALID_INPUT', 'missing tweet id'));
-  return guard('retweeters', () => engine.retweeters(tweetId, lim(limit)));
+export function runRetweeters(engine: Engine, input: string, limit?: number) {
+  const resolved = resolveTweetIdOrErr('retweeters', input);
+  if (typeof resolved !== 'string') return Promise.resolve(resolved);
+  return guard('retweeters', () => engine.retweeters(resolved, lim(limit)));
 }
 
-export function runLikers(engine: Engine, tweetId: string, limit?: number) {
-  if (!tweetId) return Promise.resolve(err('likers', 'INVALID_INPUT', 'missing tweet id'));
-  return guard('likers', () => engine.likers(tweetId, lim(limit)));
+export function runLikers(engine: Engine, input: string, limit?: number) {
+  const resolved = resolveTweetIdOrErr('likers', input);
+  if (typeof resolved !== 'string') return Promise.resolve(resolved);
+  return guard('likers', () => engine.likers(resolved, lim(limit)));
 }
 
 export function runLikes(engine: Engine, handle: string | undefined, limit?: number) {
@@ -189,9 +310,10 @@ export function runLikes(engine: Engine, handle: string | undefined, limit?: num
   });
 }
 
-export function runQuoters(engine: Engine, tweetId: string, limit?: number) {
-  if (!tweetId) return Promise.resolve(err('quoters', 'INVALID_INPUT', 'missing tweet id'));
-  return guard('quoters', () => engine.quoters(tweetId, lim(limit)));
+export function runQuoters(engine: Engine, input: string, limit?: number) {
+  const resolved = resolveTweetIdOrErr('quoters', input);
+  if (typeof resolved !== 'string') return Promise.resolve(resolved);
+  return guard('quoters', () => engine.quoters(resolved, lim(limit)));
 }
 
 export function runTrends(engine: Engine, opts: { woeid?: number; limit?: number } = {}) {
@@ -228,10 +350,11 @@ export function runCommunityInfo(engine: Engine, communityId: string) {
   });
 }
 
-export function runArticle(engine: Engine, tweetId: string) {
-  if (!tweetId) return Promise.resolve(err('article', 'INVALID_INPUT', 'missing tweet id/url'));
+export function runArticle(engine: Engine, input: string) {
+  const resolved = resolveTweetIdOrErr('article', input);
+  if (typeof resolved !== 'string') return Promise.resolve(resolved);
   return guard('article', async () => {
-    const article = await engine.article(tweetId);
+    const article = await engine.article(resolved);
     if (!article) throw new EngineError('NOT_FOUND', 'no Article found on that tweet');
     return article;
   });
@@ -243,12 +366,13 @@ export interface MediaResult {
   files?: string[];
 }
 
-export function runMedia(engine: Engine, tweetId: string, outDir?: string) {
-  if (!tweetId) return Promise.resolve(err('media', 'INVALID_INPUT', 'missing tweet id/url'));
+export function runMedia(engine: Engine, input: string, outDir?: string) {
+  const resolved = resolveTweetIdOrErr('media', input);
+  if (typeof resolved !== 'string') return Promise.resolve(resolved);
   return guard('media', async () => {
-    const media = await engine.media(tweetId);
-    const result: MediaResult = { tweetId, media };
-    if (outDir && media.length > 0) result.files = await downloadMedia(media, tweetId, outDir);
+    const media = await engine.media(resolved);
+    const result: MediaResult = { tweetId: resolved, media };
+    if (outDir && media.length > 0) result.files = await downloadMedia(media, resolved, outDir);
     return result;
   });
 }

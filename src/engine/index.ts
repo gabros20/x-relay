@@ -76,11 +76,14 @@ const EMPTY_PAGE_TOLERANCE = 3;
 export class EngineError extends Error {
   readonly code: string;
   readonly status?: number;
-  constructor(code: string, message: string, status?: number) {
+  /** For RATE_LIMITED: ms the caller should wait before retrying (from x-rate-limit-reset). */
+  readonly retryAfterMs?: number;
+  constructor(code: string, message: string, status?: number, retryAfterMs?: number) {
     super(message);
     this.name = 'EngineError';
     this.code = code;
     if (status !== undefined) this.status = status;
+    if (retryAfterMs !== undefined) this.retryAfterMs = retryAfterMs;
   }
 }
 
@@ -726,7 +729,7 @@ export function createEngine(deps: EngineDeps): Engine {
   // the account/IP is exhausted (rate-limited or auth-rejected). Other errors
   // fail fast on the current lane.
   async function call(op: OpName, request: BuiltRequest): Promise<unknown> {
-    let lastError: { code: string; message: string; status?: number } = {
+    let lastError: { code: string; message: string; status?: number; retryAfterMs?: number } = {
       code: 'FETCH_FAILED',
       message: 'no lanes available',
     };
@@ -737,7 +740,12 @@ export function createEngine(deps: EngineDeps): Engine {
       if (!ROTATE_CODES.has(res.error.code)) break;
       current = (current + 1) % lanes.length;
     }
-    throw new EngineError(lastError.code, lastError.message, lastError.status);
+    throw new EngineError(
+      lastError.code,
+      lastError.message,
+      lastError.status,
+      lastError.retryAfterMs,
+    );
   }
 
   // One lane's POST attempt; same stale-txid NOT_FOUND refresh/retry as callLane.
@@ -769,7 +777,7 @@ export function createEngine(deps: EngineDeps): Engine {
   // POST a mutation through the current lane, failing over on exhaustion exactly
   // like the read `call`. Returns the raw parsed value (the engine maps it).
   async function callPost(op: OpName, body: MutationBody): Promise<unknown> {
-    let lastError: { code: string; message: string; status?: number } = {
+    let lastError: { code: string; message: string; status?: number; retryAfterMs?: number } = {
       code: 'WRITE_FAILED',
       message: 'no lanes available',
     };
@@ -780,7 +788,12 @@ export function createEngine(deps: EngineDeps): Engine {
       if (!ROTATE_CODES.has(res.error.code)) break;
       current = (current + 1) % lanes.length;
     }
-    throw new EngineError(lastError.code, lastError.message, lastError.status);
+    throw new EngineError(
+      lastError.code,
+      lastError.message,
+      lastError.status,
+      lastError.retryAfterMs,
+    );
   }
 
   // The generic write primitive (plumbing for T8–T10). POSTs the mutation, maps

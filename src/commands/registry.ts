@@ -17,7 +17,8 @@ export const COMMANDS: CommandDef[] = [
     usage:
       'xrelay search "<query>" [--limit N] [--product Top|Latest|Media|People]\n' +
       '       [--from <h>] [--to <h>] [--since YYYY-MM-DD] [--until YYYY-MM-DD]\n' +
-      '       [--lang xx] [--min-faves N] [--min-retweets N] [--filter media|links|replies|-replies ...]',
+      '       [--lang xx] [--min-faves N] [--min-retweets N] [--filter media|links|replies|-replies ...]\n' +
+      '       [--sort engagement] [--compact | --fields a,b,c]',
   },
   {
     name: 'user',
@@ -58,7 +59,7 @@ export const COMMANDS: CommandDef[] = [
     name: 'sync',
     cost: 'medium — incremental',
     summary: 'Pull only NEW bookmarks/posts since the last sync into the local cache.',
-    usage: 'xrelay sync bookmarks|posts|all [--handle <you>] [--repair]',
+    usage: 'xrelay sync bookmarks|posts|all [--handle <you>] [--repair] [--max N]',
   },
   {
     name: 'list',
@@ -167,10 +168,36 @@ export const COMMANDS: CommandDef[] = [
       '             For bookmarks --folder, archives tweets from a specific bookmark folder.',
   },
   {
+    name: 'batch',
+    cost: 'N calls — serialized',
+    summary:
+      'Run many searches from a query file, serialized with a delay, deduped by tweet id into one archive.',
+    usage:
+      'xrelay batch --file queries.txt (--out merged.json | --stdout)\n' +
+      '       [--delay 2000] [--limit N] [--product Top|Latest|Media|People] [--quiet]\n' +
+      '       One query per line; blank lines and # comments are skipped. Progress prints to stderr.\n' +
+      '       --out MERGES into an existing archive at that path (incremental).',
+  },
+  {
+    name: 'dedupe',
+    cost: 'free — local files',
+    summary: 'Merge + dedupe search/archive output files by tweet id (offline; no network).',
+    usage:
+      'xrelay dedupe <file...> (--out merged.json | --stdout) [--sort engagement]\n' +
+      '       Accepts `xrelay search` envelopes and `xrelay archive`/`batch` files.\n' +
+      '       --out writes a FRESH archive from the listed inputs only (overwrites; does not merge).',
+  },
+  {
     name: 'whoami',
     cost: '1 call',
     summary: 'The authenticated user (handle + profile).  Alias: status.',
     usage: 'xrelay whoami',
+  },
+  {
+    name: 'doctor',
+    cost: '2 calls (0 with --offline)',
+    summary: 'Diagnose setup: entry/symlink, cookies, auth, live search, usage guidance.',
+    usage: 'xrelay doctor [--offline]   # --offline skips the live auth + search checks',
   },
   {
     name: 'post',

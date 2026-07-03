@@ -2,20 +2,24 @@
 // ─── xrelay CLI ───────────────────────────────────────────────────────────
 // Parses args, dispatches a command against the Engine, prints a JSON envelope
 // to stdout. Errors print an error envelope to stdout and exit non-zero.
-import { fileURLToPath } from 'node:url';
 import type { CacheSort } from './cache/index.ts';
 import {
   type ArchiveCommandOpts,
+  type BatchOpts,
   type CacheViewOpts,
+  type DedupeOpts,
   type SearchCommandOpts,
   runArchive,
   runArticle,
+  runBatch,
   runBookmarkAdd,
   runBookmarkFolders,
   runBookmarks,
   runCommunity,
   runCommunityInfo,
+  runDedupe,
   runDelete,
+  runDoctor,
   runFeed,
   runFollow,
   runFollowers,
@@ -49,6 +53,7 @@ import type { SearchQueryFlags } from './commands/query.ts';
 import { COMMANDS, commandNames } from './commands/registry.ts';
 import { type Engine, createEngine } from './engine/index.ts';
 import type { SearchProduct } from './engine/ops.ts';
+import { shouldRunAsEntry } from './entry.ts';
 import { extractHandle, extractTweetId } from './ids.ts';
 import { err, toJson } from './output.ts';
 import type { Envelope } from './types.ts';
@@ -73,6 +78,9 @@ const VALUE_FLAGS = new Set([
   'type',
   'folder',
   'image',
+  'fields',
+  'file',
+  'delay',
 ]);
 const BOOL_FLAGS = new Set([
   'replies',
@@ -84,6 +92,9 @@ const BOOL_FLAGS = new Set([
   'stdout',
   'following',
   'confirm',
+  'compact',
+  'offline',
+  'quiet',
 ]);
 /** Single-dash aliases. */
 const SHORT_FLAGS: Record<string, string> = { q: 'query', i: 'image' };
@@ -228,25 +239,56 @@ function helpText(): string {
   return lines.join('\n');
 }
 
+/** Split a `--fields a, b ,c` value into trimmed, non-empty field names. */
+function parseFields(raw: string): string[] {
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
 function buildSearchOpts(parsed: ParsedArgs): SearchCommandOpts {
-  const product = first(parsed, 'product');
   const limit = num(parsed, 'limit');
-  const minFaves = num(parsed, 'min-faves');
-  const minRetweets = num(parsed, 'min-retweets');
+  const sort = first(parsed, 'sort');
+  const fields = first(parsed, 'fields');
   return {
     query: parsed.positionals.join(' '),
+    ...(limit !== undefined ? { limit } : {}),
+    ...parseSearchFlags(parsed),
+    // Live search supports only engagement ranking; invalid values are rejected
+    // by the search dispatch before this runs, so any other value never arrives.
+    ...(sort === 'engagement' ? { sort: 'engagement' } : {}),
+    ...(parsed.bools.has('compact') ? { compact: true } : {}),
+    ...(fields !== undefined ? { fields: parseFields(fields) } : {}),
+  };
+}
+
+function buildBatchOpts(parsed: ParsedArgs): BatchOpts {
+  const delay = num(parsed, 'delay');
+  const limit = num(parsed, 'limit');
+  const product = first(parsed, 'product');
+  return {
+    file: first(parsed, 'file') ?? '',
+    ...(delay !== undefined ? { delay } : {}),
     ...(limit !== undefined ? { limit } : {}),
     ...(product && PRODUCTS.has(product as SearchProduct)
       ? { product: product as SearchProduct }
       : {}),
-    ...(first(parsed, 'from') ? { from: first(parsed, 'from') } : {}),
-    ...(first(parsed, 'to') ? { to: first(parsed, 'to') } : {}),
-    ...(first(parsed, 'since') ? { since: first(parsed, 'since') } : {}),
-    ...(first(parsed, 'until') ? { until: first(parsed, 'until') } : {}),
-    ...(first(parsed, 'lang') ? { lang: first(parsed, 'lang') } : {}),
-    ...(minFaves !== undefined ? { minFaves } : {}),
-    ...(minRetweets !== undefined ? { minRetweets } : {}),
-    ...(parsed.flags.filter ? { filter: parsed.flags.filter } : {}),
+    ...(first(parsed, 'out') ? { out: first(parsed, 'out') } : {}),
+    ...(parsed.bools.has('stdout') ? { stdout: true } : {}),
+    ...(parsed.bools.has('quiet') ? { quiet: true } : {}),
+  };
+}
+
+function buildDedupeOpts(parsed: ParsedArgs): DedupeOpts {
+  const sort = first(parsed, 'sort');
+  return {
+    files: parsed.positionals,
+    ...(first(parsed, 'out') ? { out: first(parsed, 'out') } : {}),
+    ...(parsed.bools.has('stdout') ? { stdout: true } : {}),
+    // Pass any --sort through raw; runDedupe rejects non-'engagement' loudly
+    // rather than silently dropping it.
+    ...(sort !== undefined ? { sort } : {}),
   };
 }
 
@@ -275,25 +317,25 @@ function dispatchReadOps(
     case 'following':
       return runFollowing(engine, extractHandle(target) ?? target, limit);
     case 'retweeters':
-      return runRetweeters(engine, extractTweetId(target) ?? target, limit);
+      return runRetweeters(engine, target, limit);
     case 'likers':
-      return runLikers(engine, extractTweetId(target) ?? target, limit);
+      return runLikers(engine, target, limit);
     case 'likes': {
       // Handle is optional — runner falls back to the authenticated user when omitted.
       const likesHandle = target ? (extractHandle(target) ?? target) : undefined;
       return runLikes(engine, likesHandle, limit);
     }
     case 'quoters':
-      return runQuoters(engine, extractTweetId(target) ?? target, limit);
+      return runQuoters(engine, target, limit);
     case 'trends':
       return runTrends(engine, {
         ...(num(parsed, 'woeid') !== undefined ? { woeid: num(parsed, 'woeid') } : {}),
         ...(limit !== undefined ? { limit } : {}),
       });
     case 'article':
-      return runArticle(engine, extractTweetId(target) ?? target);
+      return runArticle(engine, target);
     case 'media':
-      return runMedia(engine, extractTweetId(target) ?? target, first(parsed, 'out'));
+      return runMedia(engine, target, first(parsed, 'out'));
     case 'community':
       return runCommunity(engine, target, limit);
     case 'community-info':
@@ -379,6 +421,26 @@ function dispatchWriteOps(
   }
 }
 
+/**
+ * Dispatch the live `search` command. Live search ranks only by engagement, so
+ * any other --sort value is rejected loudly (the cache SORTS set is separate and
+ * must not leak into live search).
+ */
+function dispatchSearch(parsed: ParsedArgs, engine: Engine): Promise<Envelope<unknown>> {
+  const sortFlag = first(parsed, 'sort');
+  if (sortFlag !== undefined && sortFlag !== 'engagement') {
+    return Promise.resolve(
+      err(
+        'search',
+        'INVALID_INPUT',
+        `invalid --sort '${sortFlag}' for live search`,
+        "the only supported live-search sort is 'engagement'",
+      ),
+    );
+  }
+  return runSearch(engine, buildSearchOpts(parsed));
+}
+
 /** Dispatch parsed args against an engine. Returns an envelope (does not print). */
 export async function dispatch(parsed: ParsedArgs, engine: Engine): Promise<Envelope<unknown>> {
   const { command } = parsed;
@@ -386,7 +448,7 @@ export async function dispatch(parsed: ParsedArgs, engine: Engine): Promise<Enve
 
   switch (command) {
     case 'search':
-      return runSearch(engine, buildSearchOpts(parsed));
+      return dispatchSearch(parsed, engine);
     case 'user':
       return runUser(engine, extractHandle(target) ?? target);
     case 'user-posts':
@@ -396,7 +458,7 @@ export async function dispatch(parsed: ParsedArgs, engine: Engine): Promise<Enve
         ...(num(parsed, 'limit') !== undefined ? { limit: num(parsed, 'limit') } : {}),
       });
     case 'thread':
-      return runThread(engine, extractTweetId(target) ?? target);
+      return runThread(engine, target);
     case 'bookmarks': {
       // `bookmarks folders [<id>]` → bookmark folder list or folder timeline
       if (target === 'folders') {
@@ -430,9 +492,15 @@ export async function dispatch(parsed: ParsedArgs, engine: Engine): Promise<Enve
     }
     case 'archive':
       return runArchive(engine, buildArchiveOpts(parsed));
+    case 'batch':
+      return runBatch(engine, buildBatchOpts(parsed));
+    case 'dedupe':
+      return Promise.resolve(runDedupe(buildDedupeOpts(parsed)));
     case 'whoami':
     case 'status':
       return runWhoami(engine);
+    case 'doctor':
+      return runDoctor(engine, { offline: parsed.bools.has('offline') });
     default:
       return (
         dispatchReadOps(parsed, engine, command, target) ??
@@ -460,11 +528,16 @@ export async function run(argv: string[], engine?: Engine): Promise<number> {
   return envelope.ok ? 0 : 1;
 }
 
-const isEntry =
-  import.meta.main === true ||
-  (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.argv[1]);
+// Fail-loud: when the runtime gives no definitive answer and the invocation
+// looks like our binary, run anyway (after a stderr warning) — never silently
+// exit 0 under the npm bin symlink.
+const entry = shouldRunAsEntry(process.argv[1], import.meta.url, import.meta.main, [
+  'xrelay',
+  'cli.js',
+]);
+if (entry.warning !== undefined) process.stderr.write(`${entry.warning}\n`);
 
-if (isEntry) {
+if (entry.run) {
   run(process.argv.slice(2)).then(
     (code) => {
       process.exitCode = code;

@@ -16,7 +16,10 @@ export type TransactionProvider = (method: string, path: string) => Promise<stri
 
 export type ClientResult =
   | { ok: true; value: unknown }
-  | { ok: false; error: { code: string; message: string; status?: number } };
+  | {
+      ok: false;
+      error: { code: string; message: string; status?: number; retryAfterMs?: number };
+    };
 
 interface CreateClientArgs {
   cookies: Cookies;
@@ -161,9 +164,16 @@ export function createClient(args: CreateClientArgs): {
 
     if (status === 429) {
       if (retries.rateLimit >= maxRetries) {
+        // Surface the wait the caller should honor: the same ms-until-reset the
+        // retry path would have slept, computed from the final 429's reset header.
         return {
           ok: false,
-          error: { code: 'RATE_LIMITED', status: 429, message: 'Rate limited; retries exhausted.' },
+          error: {
+            code: 'RATE_LIMITED',
+            status: 429,
+            message: 'Rate limited; retries exhausted.',
+            retryAfterMs: backoffMs(res),
+          },
         };
       }
       retries.rateLimit += 1;

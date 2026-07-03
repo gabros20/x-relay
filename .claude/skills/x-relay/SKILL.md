@@ -50,6 +50,27 @@ gives recency (best for "what's being said right now" and incremental sweeps).
 
 ---
 
+## Building a large corpus (100+ sources)
+
+When the task is "gather everything on <topic>" rather than "find the best few", don't hand-loop `search`.
+Lead with **`archive search`** (full-fidelity capture straight to a file) and **`batch`** (many query variants,
+serialized, deduped into one archive), then **`dedupe`** to fold in any extra passes:
+
+```
+printf '%s\n' "prompt engineering" "context engineering" "llm evals" > queries.txt
+xrelay batch --file queries.txt --out corpus.json --delay 3000 --product Latest
+xrelay dedupe corpus.json extra-pass.json --out merged.json --sort engagement   # extra-pass.json from an earlier sweep
+```
+
+`batch --out` merges incrementally, so you can re-run it to top up the same file; `dedupe` gives you an offline
+merge/rank across whatever files you've accumulated.
+
+> **Anti-pattern — never fire many parallel `xrelay search` calls from your shell.** Concurrent queries get the
+> account rate-limited fast. **Serialize with 2–5s gaps** — `batch --delay` does exactly this for you. On a
+> `RATE_LIMITED` error, back off by `error.retryAfterMs` before retrying (see Error codes below).
+
+---
+
 ## Commands (atomic reference)
 
 All commands print a JSON envelope to stdout — `{ ok, command, data }` on success,
@@ -61,11 +82,24 @@ All commands print a JSON envelope to stdout — `{ ok, command, data }` on succ
 xrelay search "<query>" [--limit N] [--product Top|Latest|Media|People]
        [--from <h>] [--to <h>] [--since YYYY-MM-DD] [--until YYYY-MM-DD]
        [--lang xx] [--min-faves N] [--min-retweets N] [--filter media|links|replies|-replies ...]
+       [--sort engagement] [--compact | --fields a,b,c]
 ```
 - X **advanced operators also work inside the query string** — the flags are just a typed shortcut that
   get folded into it. `--filter -replies` excludes replies; `--filter media` keeps only media tweets.
 - Returns `{ query, product, tweets: [{ id, url, text, author:{handle,name,verified,followers},
   metrics:{likes,retweets,replies,quotes,bookmarks,views}, createdAt, lang, media[], ... }], nextCursor }`.
+- **Output modes** (context-savers for large sweeps):
+  - `--sort engagement` — rank results by an engagement score (`likes + replies*3 + bookmarks*2`) before returning.
+  - `--compact` — transform each `tweets[]` entry into a flat row `{ id, url, handle, name, date, text (≤280),
+    likes, replies, bookmarks, views }` (with `name`/`date` omitted when the tweet lacks them) and add a
+    `compact: true` marker — the envelope's `query`/`product`/`nextCursor` are unchanged. Much cheaper on context
+    for ranking passes.
+  - `--fields a,b,c` — project each row down to just those compact fields (any of the compact keys above).
+    Mutually exclusive with `--compact`; an empty or unknown field name errors loudly (`INVALID_INPUT`).
+  - Compact/field-projected output drops the nested author + full metrics — use full output when you need those,
+    and note `dedupe` wants full output (compact rows lose `author`).
+  - **Over MCP** the `search` tool returns **compact rows by DEFAULT** (agents want slim output); pass
+    `compact: false` for the full enriched envelope. The CLI defaults to full output — `--compact` opts in.
 
 ### `user` — COST: 1 call. Vet a source.
 ```
@@ -120,6 +154,18 @@ xrelay status   # alias for whoami
 ```
 - Returns the authenticated user's profile `{ id, handle, name, bio, verified, followers, ... }`.
   Use this to confirm your session is valid and see which account is active.
+
+### `doctor` — COST: 2 calls (0 with `--offline`). Diagnose the setup.
+```
+xrelay doctor [--offline]
+```
+- **Run this first** whenever `xrelay` prints nothing, errors oddly, or returns empty results — it tells you
+  what's actually wrong instead of guessing. Checks: entry/symlink + environment, cookie resolution (source /
+  browser — presence only, never values), a live `whoami` and a bounded 1-result test search (both capped by a
+  15s timeout), plus static usage guidance. Always returns an Ok envelope with `data.healthy` / `data.checks[]`
+  / `data.summary`.
+- `--offline` skips the two live (network) checks but still resolves cookies (may touch the macOS Keychain) —
+  use it to diagnose install/config problems with no network.
 
 ### `likes` — COST: medium. Liked tweets.
 ```
@@ -176,6 +222,29 @@ xrelay archive bookmarks [--out <file.json>] [--limit N] [--full] [--prune] [--s
 - **feed `[--following]`**: archives your home feed (for-you) or `--following` (chronological). No
   membership-stop (feed ordering is not id-monotonic); `--since` post-filters client-side.
 - Returns `{ source, out?, added, total, newestId }`.
+
+### `batch` — COST: N calls, serialized. Many searches → one deduped archive.
+```
+xrelay batch --file queries.txt (--out merged.json | --stdout)
+       [--delay 2000] [--limit N] [--product Top|Latest|Media|People] [--quiet]
+```
+- One query per line (blank lines and `#` comments skipped). Runs them **strictly serialized** with `--delay`
+  ms between queries (default 2000), continue-on-error (a failed query is recorded with `{code, message,
+  retryAfterMs?}` and the run proceeds; a `RATE_LIMITED` query waits its `retryAfterMs` before the next),
+  deduped by tweet id across all queries. Progress prints to stderr (`searching k/n: <query>`); `--quiet`
+  silences it. `--out` **MERGES** into an existing archive at that path (incremental — safe to re-run).
+- Returns `{ queries, succeeded, failed, totalUnique, out?, perQuery }`.
+
+### `dedupe` — COST: free, offline. Merge search/archive files.
+```
+xrelay dedupe <file...> (--out merged.json | --stdout) [--sort engagement]
+```
+- Offline merge + dedupe (by tweet id) of `xrelay search` envelopes AND `archive`/`batch` files (shape is
+  auto-detected). No network. `--sort engagement` ranks the merged set; any other `--sort` errors loudly.
+  `--out` writes a **FRESH** archive from exactly the listed inputs (overwrites — it does not merge into an
+  existing file the way `batch --out` does). CLI-only (not an MCP tool).
+- **Caveat:** expects FULL (non-compact) search output — compact rows have no `author`, so they degrade the
+  merged archive. Don't feed `--compact`/`--fields` output into `dedupe`.
 
 ### More endpoints
 
@@ -266,9 +335,15 @@ xrelay delete <id|url> --confirm  # permanently delete one of your tweets.
 
 ## Error codes
 
-- `INVALID_INPUT` — empty query / missing handle or id. No network call.
+On failure the `error` object is `{ code, message, hint }` plus two **optional** fields when X supplies them:
+`status` (the upstream HTTP status) and `retryAfterMs` (how long to wait before retrying — set on
+`RATE_LIMITED`). Read `retryAfterMs` and back off by it rather than guessing.
+
+- `INVALID_INPUT` — empty query / missing handle or id, or an unparseable tweet id/URL, or a bad flag combo
+  (`--compact` + `--fields`, an empty/unknown `--fields` name, an unsupported `--sort`). No network call.
 - `AUTH_FAILED` — session cookies expired/invalid. Re-log into x.com in your browser (or set XRELAY_COOKIES).
-- `RATE_LIMITED` — X throttled the token; back off and retry later.
+- `RATE_LIMITED` — X throttled the token; wait `error.retryAfterMs` (when present) before retrying, and
+  serialize queries with 2–5s gaps. `batch` handles this pacing for you.
 - `FEATURE_DRIFT` — X rotated its private API; the tool's query-ids/features need a refresh.
 - `NOT_FOUND` — the tweet/user is unavailable, or a transient API hiccup.
 - `CONFIRMATION_REQUIRED` — destructive write attempted without `--confirm`. Re-run with `--confirm` to proceed.
@@ -281,6 +356,17 @@ npm i -g x-relay-mcp
 ```
 Cookies are read automatically from your logged-in browser (macOS Keychain). The first run may show a one-time
 Keychain "Always Allow" prompt. Assumes a residential IP (run locally); datacenter IPs are blocked by X.
+
+### Troubleshooting
+
+- **If `xrelay` prints nothing, exits silently, or errors oddly → run `xrelay doctor` first.** It reports what's
+  actually wrong (install/entry, cookies, auth, a live test search) instead of leaving you to guess. Use
+  `xrelay doctor --offline` to diagnose install/config with no network calls.
+- The old npm global-install silent-exit is fixed (the binary now fails loudly to stderr), so
+  `node $(readlink -f $(which xrelay))` should no longer be needed — but it still works and proves the install
+  resolves to a real entry file if you ever suspect a broken symlink.
+- Empty results from `thread` / `retweeters` / `likers` / `quoters` / `article` / `media` are no longer silent:
+  an unparseable id/URL fails loudly with `INVALID_INPUT` + a hint, so a bad ref won't masquerade as "no data".
 
 ### Account pool + proxy (optional — for heavy/sustained use)
 

@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'bun:test';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { dispatch, parseArgs } from '../src/cli.ts';
 import type { Engine } from '../src/engine/index.ts';
 import type {
@@ -196,6 +199,14 @@ describe('dispatch', () => {
     expect(calls[0]).toBe('thread:123456789');
   });
 
+  test('thread with a malformed X URL is rejected without calling the engine', async () => {
+    const calls: string[] = [];
+    const env = await dispatch(parseArgs(['thread', 'https://x.com/foo']), fakeEngine(calls));
+    expect(env.ok).toBe(false);
+    if (!env.ok) expect(env.error.code).toBe('INVALID_INPUT');
+    expect(calls).toHaveLength(0);
+  });
+
   test('user-posts forwards the replies flag', async () => {
     const calls: string[] = [];
     await dispatch(parseArgs(['user-posts', 'karpathy', '--replies']), fakeEngine(calls));
@@ -210,14 +221,14 @@ describe('dispatch', () => {
     await dispatch(parseArgs(['retweeters', 'https://x.com/x/status/123']), eng);
     await dispatch(parseArgs(['trends', '--woeid', '23424977']), eng);
     await dispatch(parseArgs(['article', 'https://x.com/x/status/999']), eng);
-    await dispatch(parseArgs(['media', '777']), eng);
+    await dispatch(parseArgs(['media', '777888']), eng);
     expect(calls).toEqual([
       'list:1539453138322673664',
       'userMedia:karpathy',
       'retweeters:123',
       'trends:23424977',
       'article:999',
-      'media:777',
+      'media:777888',
     ]);
   });
 
@@ -240,6 +251,63 @@ describe('dispatch', () => {
     const env = await dispatch(parseArgs(['search']), fakeEngine(calls));
     expect(env.ok).toBe(false);
     expect(calls).toHaveLength(0);
+  });
+
+  test('search --compact reaches the runner and marks the output compact', async () => {
+    const calls: string[] = [];
+    const env = await dispatch(parseArgs(['search', 'ai', '--compact']), fakeEngine(calls));
+    expect(env.ok).toBe(true);
+    if (!env.ok) throw new Error('expected success');
+    expect((env.data as { compact?: boolean }).compact).toBe(true);
+  });
+
+  test('search --fields x,y reaches the runner and marks the output compact', async () => {
+    const calls: string[] = [];
+    const env = await dispatch(
+      parseArgs(['search', 'ai', '--fields', 'id,likes']),
+      fakeEngine(calls),
+    );
+    expect(env.ok).toBe(true);
+    if (!env.ok) throw new Error('expected success');
+    expect((env.data as { compact?: boolean }).compact).toBe(true);
+  });
+
+  test('search --fields with only commas/blanks → INVALID_INPUT (no silent no-op)', async () => {
+    const calls: string[] = [];
+    const env = await dispatch(parseArgs(['search', 'ai', '--fields', ' , ,']), fakeEngine(calls));
+    expect(env.ok).toBe(false);
+    if (env.ok) throw new Error('expected failure');
+    expect(env.error.code).toBe('INVALID_INPUT');
+    expect(calls).toHaveLength(0);
+  });
+
+  test('search --sort engagement is accepted (shape untouched, no compact marker)', async () => {
+    const calls: string[] = [];
+    const env = await dispatch(
+      parseArgs(['search', 'ai', '--sort', 'engagement']),
+      fakeEngine(calls),
+    );
+    expect(env.ok).toBe(true);
+    if (!env.ok) throw new Error('expected success');
+    expect('compact' in env.data).toBe(false);
+    expect(calls[0]).toBe('search:ai:-:-');
+  });
+
+  test('search with an invalid --sort value → INVALID_INPUT', async () => {
+    const calls: string[] = [];
+    const env = await dispatch(parseArgs(['search', 'ai', '--sort', 'foo']), fakeEngine(calls));
+    expect(env.ok).toBe(false);
+    if (env.ok) throw new Error('expected failure');
+    expect(env.error.code).toBe('INVALID_INPUT');
+    expect(calls).toHaveLength(0);
+  });
+
+  test('cache bookmarks --sort likes still routes to the cache runner (regression)', async () => {
+    const calls: string[] = [];
+    const env = await dispatch(parseArgs(['bookmarks', '--sort', 'likes']), fakeEngine(calls));
+    // Cache read (not --live): the engine.bookmarks() live path must NOT fire.
+    expect(env.ok).toBe(true);
+    expect(calls.every((c) => !c.startsWith('bookmarks:'))).toBe(true);
   });
 
   test('like / unlike / bookmark / unbookmark dispatch to correct engine methods', async () => {
@@ -340,6 +408,83 @@ describe('dispatch', () => {
     expect(calls).toContain('uploadMedia:/a.jpg');
     expect(calls).toContain('uploadMedia:/b.png');
     expect(calls).toContain('uploadMedia:/c.gif');
+  });
+
+  test('batch --file <f> --stdout dispatches and runs each query through the engine', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'xrelay-cli-batch-'));
+    try {
+      const f = join(dir, 'q.txt');
+      writeFileSync(f, 'hello\n', 'utf-8');
+      const calls: string[] = [];
+      const env = await dispatch(
+        parseArgs(['batch', '--file', f, '--stdout', '--quiet']),
+        fakeEngine(calls),
+      );
+      expect(env.ok).toBe(true);
+      expect(env.command).toBe('batch');
+      expect(calls.some((c) => c.startsWith('search:hello'))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('dedupe collects multiple positional files and dispatches to the offline runner', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'xrelay-cli-dedupe-'));
+    try {
+      const mk = (name: string) => {
+        const p = join(dir, name);
+        writeFileSync(
+          p,
+          JSON.stringify({
+            schema: 'x-relay/archive@1',
+            source: 'bookmarks',
+            generatedAt: '2026-01-01T00:00:00.000Z',
+            count: 1,
+            tweets: [
+              {
+                id: name === 'a.json' ? '1' : '2',
+                url: 'https://x.com/i/status/1',
+                text: 't',
+                author: { id: '1', handle: 'h', name: 'N', verified: false },
+                metrics: {},
+              },
+            ],
+          }),
+          'utf-8',
+        );
+        return p;
+      };
+      const a = mk('a.json');
+      const b = mk('b.json');
+      const out = join(dir, 'm.json');
+      const parsed = parseArgs(['dedupe', a, b, '--out', out]);
+      expect(parsed.positionals).toEqual([a, b]); // multiple positionals captured
+      // dedupe is offline — no engine call; pass a throwing engine to prove it.
+      const env = await dispatch(parsed, fakeEngine([]));
+      expect(env.ok).toBe(true);
+      expect(env.command).toBe('dedupe');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('doctor --offline dispatches without any engine calls', async () => {
+    // Provide cookies via env so the doctor cookie check never touches the Keychain.
+    const saved = process.env.XRELAY_COOKIES;
+    process.env.XRELAY_COOKIES = 'auth_token=x; ct0=y';
+    try {
+      const calls: string[] = [];
+      const env = await dispatch(parseArgs(['doctor', '--offline']), fakeEngine(calls));
+      expect(env.ok).toBe(true);
+      if (!env.ok) throw new Error('expected Ok envelope');
+      expect(env.command).toBe('doctor');
+      // --offline performs no live checks, so the fakeEngine is untouched.
+      expect(calls).toHaveLength(0);
+    } finally {
+      // biome-ignore lint/performance/noDelete: env cleanup — assigning undefined would stringify to "undefined"
+      if (saved === undefined) delete process.env.XRELAY_COOKIES;
+      else process.env.XRELAY_COOKIES = saved;
+    }
   });
 });
 

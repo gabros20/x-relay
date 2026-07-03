@@ -4,15 +4,19 @@
 // tools. No business logic — delegates to the command runners over one lazily
 // created Engine (cookies auto-extracted from the local browser).
 import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import {
+  type ArchiveCommandOpts,
+  type SearchCommandOpts,
+  runArchive,
   runArticle,
+  runBatch,
   runBookmarks,
   runCommunity,
   runCommunityInfo,
+  runDoctor,
   runFollowers,
   runFollowing,
   runLikers,
@@ -28,10 +32,12 @@ import {
   runUser,
   runUserMedia,
   runUserPosts,
+  runWhoami,
 } from './commands/index.ts';
 import { type Engine, createEngine } from './engine/index.ts';
 import type { SearchProduct } from './engine/ops.ts';
-import { extractHandle, extractTweetId } from './ids.ts';
+import { shouldRunAsEntry } from './entry.ts';
+import { extractHandle } from './ids.ts';
 import { toJson } from './output.ts';
 import type { Envelope } from './types.ts';
 
@@ -49,6 +55,62 @@ function wrap(envelope: Envelope<unknown>): ToolResult {
   return result;
 }
 
+/**
+ * Map the MCP search tool args to SearchCommandOpts. `compact` defaults true
+ * (agents want slim output), but `--fields` and `--compact` are mutually
+ * exclusive — when fields is given we forward fields and drop the implicit compact.
+ */
+function buildMcpSearchOpts(args: Record<string, unknown>): SearchCommandOpts {
+  // A present `fields` array (even empty) forwards fields and drops the implicit
+  // compact default — an empty array then surfaces as INVALID_INPUT rather than a
+  // silent no-op, matching the CLI. Absent fields falls back to compact.
+  const useFields = Array.isArray(args.fields);
+  const outputMode = useFields
+    ? { fields: (args.fields as string[]).map(String) }
+    : args.compact
+      ? { compact: true }
+      : {};
+  return {
+    query: String(args.query ?? ''),
+    ...(args.limit !== undefined ? { limit: Number(args.limit) } : {}),
+    ...(args.product ? { product: args.product as SearchProduct } : {}),
+    ...(args.from ? { from: String(args.from) } : {}),
+    ...(args.to ? { to: String(args.to) } : {}),
+    ...(args.since ? { since: String(args.since) } : {}),
+    ...(args.until ? { until: String(args.until) } : {}),
+    ...(args.lang ? { lang: String(args.lang) } : {}),
+    ...(args.minFaves !== undefined ? { minFaves: Number(args.minFaves) } : {}),
+    ...(args.minRetweets !== undefined ? { minRetweets: Number(args.minRetweets) } : {}),
+    ...(Array.isArray(args.filter) ? { filter: args.filter.map(String) } : {}),
+    ...(args.sort ? { sort: args.sort as 'engagement' } : {}),
+    ...outputMode,
+  };
+}
+
+/**
+ * Map the MCP archive tool args to ArchiveCommandOpts. Mirrors `runArchive`'s
+ * CLI surface for the read targets, with two MCP-specific rules: `out` is always
+ * carried (the archive is written to disk — there is no stdout streaming mode),
+ * and `stdout` is never set. A @handle / profile URL is normalized to a bare
+ * handle, matching `buildArchiveOpts` in cli.ts.
+ */
+export function buildMcpArchiveOpts(args: Record<string, unknown>): ArchiveCommandOpts {
+  return {
+    target: String(args.target ?? ''),
+    out: String(args.out ?? ''),
+    ...(args.query !== undefined ? { query: String(args.query) } : {}),
+    ...(args.handle ? { handle: extractHandle(String(args.handle)) ?? String(args.handle) } : {}),
+    ...(args.listId ? { listId: String(args.listId) } : {}),
+    ...(args.limit !== undefined ? { limit: Number(args.limit) } : {}),
+    ...(args.full ? { full: true } : {}),
+    ...(args.since ? { since: String(args.since) } : {}),
+    ...(args.replies ? { replies: true } : {}),
+    ...(args.product ? { product: args.product as SearchProduct } : {}),
+    ...(args.following ? { following: true } : {}),
+    ...(args.folderId ? { folderId: String(args.folderId) } : {}),
+  };
+}
+
 function buildServer(): McpServer {
   const require = createRequire(import.meta.url);
   // biome-ignore lint/suspicious/noExplicitAny: dynamic require of package.json
@@ -59,7 +121,7 @@ function buildServer(): McpServer {
     'search',
     {
       description:
-        'Live X/Twitter search — the wide net. Returns enriched tweet summaries (author, verified, likes/retweets/replies/quotes/bookmarks, views, date). Rank on this metadata before reading threads.',
+        'Live X/Twitter search — the wide net. By DEFAULT (compact=true) returns slim, flat tweet rows {id,url,handle,name,date,text,likes,replies,bookmarks,views} plus a compact:true marker — far cheaper on context. Set compact=false for the full enriched envelope (nested author + all metrics). Use fields=[...] to project only the columns you need (mutually exclusive with compact). sort="engagement" ranks by likes+replies*3+bookmarks*2. Rank on this metadata before reading threads.',
       inputSchema: {
         query: z.string().describe('search text; X advanced operators inside the string also work'),
         limit: z.number().int().positive().optional(),
@@ -72,24 +134,18 @@ function buildServer(): McpServer {
         minFaves: z.number().int().nonnegative().optional(),
         minRetweets: z.number().int().nonnegative().optional(),
         filter: z.array(z.string()).describe('e.g. media, links, -replies').optional(),
+        sort: z.enum(['engagement']).describe('rank by engagement score, desc').optional(),
+        compact: z
+          .boolean()
+          .describe('flat, context-cheap tweet rows (default true)')
+          .default(true),
+        fields: z
+          .array(z.string())
+          .describe('project only these compact fields; overrides compact')
+          .optional(),
       },
     },
-    async (args) =>
-      wrap(
-        await runSearch(getEngine(), {
-          query: String(args.query ?? ''),
-          ...(args.limit !== undefined ? { limit: Number(args.limit) } : {}),
-          ...(args.product ? { product: args.product as SearchProduct } : {}),
-          ...(args.from ? { from: String(args.from) } : {}),
-          ...(args.to ? { to: String(args.to) } : {}),
-          ...(args.since ? { since: String(args.since) } : {}),
-          ...(args.until ? { until: String(args.until) } : {}),
-          ...(args.lang ? { lang: String(args.lang) } : {}),
-          ...(args.minFaves !== undefined ? { minFaves: Number(args.minFaves) } : {}),
-          ...(args.minRetweets !== undefined ? { minRetweets: Number(args.minRetweets) } : {}),
-          ...(Array.isArray(args.filter) ? { filter: args.filter.map(String) } : {}),
-        }),
-      ),
+    async (args) => wrap(await runSearch(getEngine(), buildMcpSearchOpts(args))),
   );
 
   server.registerTool(
@@ -133,13 +189,7 @@ function buildServer(): McpServer {
       description: 'A tweet plus its reply thread — the full read. Use only on finalists.',
       inputSchema: { target: z.string().describe('tweet id or status URL') },
     },
-    async (args) =>
-      wrap(
-        await runThread(
-          getEngine(),
-          extractTweetId(String(args.target ?? '')) ?? String(args.target ?? ''),
-        ),
-      ),
+    async (args) => wrap(await runThread(getEngine(), String(args.target ?? ''))),
   );
 
   const SORT = z.enum(['relevance', 'newest', 'oldest', 'likes', 'views', 'bookmarks']);
@@ -218,7 +268,9 @@ function buildServer(): McpServer {
   const handleIn = { handle: z.string(), limit: N };
   const tweetIn = { target: z.string().describe('tweet id or status URL'), limit: N };
   const h = (v: unknown) => extractHandle(String(v ?? '')) ?? String(v ?? '');
-  const t = (v: unknown) => extractTweetId(String(v ?? '')) ?? String(v ?? '');
+  // Tweet-id runners validate the raw reference themselves (runners.ts), so the
+  // shim forwards the raw string rather than pre-extracting.
+  const t = (v: unknown) => String(v ?? '');
   const n = (v: unknown) => (v !== undefined ? Number(v) : undefined);
 
   server.registerTool(
@@ -310,6 +362,98 @@ function buildServer(): McpServer {
     },
     async (a) => wrap(await runCommunityInfo(getEngine(), String(a.communityId ?? ''))),
   );
+  server.registerTool(
+    'doctor',
+    {
+      description:
+        'Diagnose setup: entry/symlink, cookie resolution, live auth (whoami) + a 1-result test search, and usage guidance. Run this first when calls return empty or fail. offline=true skips the two live checks (no network calls).',
+      inputSchema: {
+        offline: z
+          .boolean()
+          .describe('skip the live auth + search checks (no network calls)')
+          .optional(),
+      },
+    },
+    async (a) => wrap(await runDoctor(getEngine(), { offline: Boolean(a.offline) })),
+  );
+
+  server.registerTool(
+    'batch',
+    {
+      description:
+        'Run MANY X searches from a query file, strictly serialized with a delay between calls, and merge the results — deduped by tweet id — into one archive file. One query per line; blank lines and # comments are skipped. Continue-on-error: a failed query is recorded and the run proceeds (a rate-limited query waits its retryAfterMs). Returns a summary {queries, succeeded, failed, totalUnique, out, perQuery}. `out` is required over MCP (the archive is written to disk, not streamed back).',
+      inputSchema: {
+        file: z.string().describe('path to a newline-delimited query file'),
+        out: z.string().describe('output archive file path (required)'),
+        delay: z
+          .number()
+          .int()
+          .nonnegative()
+          .describe('ms to sleep between queries (default 2000)')
+          .optional(),
+        limit: z.number().int().positive().describe('per-query result cap').optional(),
+        product: z.enum(['Top', 'Latest', 'Media', 'People']).optional(),
+      },
+    },
+    async (a) =>
+      wrap(
+        await runBatch(getEngine(), {
+          file: String(a.file ?? ''),
+          out: String(a.out ?? ''),
+          ...(a.delay !== undefined ? { delay: Number(a.delay) } : {}),
+          ...(a.limit !== undefined ? { limit: Number(a.limit) } : {}),
+          ...(a.product ? { product: a.product as SearchProduct } : {}),
+          quiet: true, // no stderr progress over the MCP stdio transport
+        }),
+      ),
+  );
+
+  server.registerTool(
+    'archive',
+    {
+      description:
+        'Archive full-fidelity tweet JSON to a local file and return the summary {added, total, out}. Sweeps a read target — bookmarks | user | my-posts | search | list | likes | feed — and writes the complete records to disk (nothing large is streamed back). Re-running the same `out` is incremental: only new tweets are added (pass full=true to rebuild). `out` is REQUIRED over MCP. For the search target, X advanced operators can be embedded directly in `query`.',
+      inputSchema: {
+        target: z
+          .enum(['bookmarks', 'user', 'my-posts', 'search', 'list', 'likes', 'feed'])
+          .describe('which read target to archive'),
+        out: z.string().describe('output archive file path (required)'),
+        query: z.string().describe('search text (search target)').optional(),
+        handle: z
+          .string()
+          .describe('@handle, bare handle, or URL (required for user; optional for likes)')
+          .optional(),
+        listId: z.string().describe('Twitter List id (list target)').optional(),
+        limit: z.number().int().positive().describe('max tweets to fetch this run').optional(),
+        full: z
+          .boolean()
+          .describe('full rebuild — ignore prior ids and page up to limit')
+          .optional(),
+        since: z.string().describe('YYYY-MM-DD — drop tweets older than this').optional(),
+        replies: z.boolean().describe('include replies (user / my-posts targets)').optional(),
+        product: z
+          .enum(['Top', 'Latest', 'Media', 'People'])
+          .describe('search tab (search target)')
+          .optional(),
+        following: z
+          .boolean()
+          .describe('following/chronological timeline (feed target)')
+          .optional(),
+        folderId: z.string().describe('bookmark folder id (bookmarks target)').optional(),
+      },
+    },
+    async (args) => wrap(await runArchive(getEngine(), buildMcpArchiveOpts(args))),
+  );
+
+  server.registerTool(
+    'whoami',
+    {
+      description:
+        'Who am I? Returns the authenticated account profile the login cookies resolve to (handle, name, id, counts) — confirm the active identity before other calls.',
+      inputSchema: {},
+    },
+    async () => wrap(await runWhoami(getEngine())),
+  );
 
   return server;
 }
@@ -319,8 +463,13 @@ export async function main(): Promise<void> {
   await server.connect(new StdioServerTransport());
 }
 
-const isEntry =
-  import.meta.main === true ||
-  (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.argv[1]);
+// Fail-loud: when the runtime gives no definitive answer and the invocation
+// looks like our binary, run anyway (after a stderr warning) — never silently
+// exit 0 under the npm bin symlink.
+const entry = shouldRunAsEntry(process.argv[1], import.meta.url, import.meta.main, [
+  'x-relay-mcp',
+  'mcp-shim.js',
+]);
+if (entry.warning !== undefined) process.stderr.write(`${entry.warning}\n`);
 
-if (isEntry) void main();
+if (entry.run) void main();

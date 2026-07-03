@@ -60,6 +60,21 @@ export function extractTweetId(input: string): string | null {
   return id !== undefined && PATH_TWEET_ID_RE.test(id) ? id : null;
 }
 
+/**
+ * True when the input was *meant* as a tweet reference: any URL on an X host
+ * (even if id extraction later fails) or anything `extractTweetId` accepts.
+ * Bare non-numeric, non-URL strings are false. Lets callers distinguish a
+ * malformed tweet URL from a plain query and fail loudly instead of silently
+ * passing a raw string to the engine.
+ */
+export function looksLikeTweetRef(input: string): boolean {
+  if (!input) return false;
+  if (extractTweetId(input) !== null) return true;
+
+  const url = parseUrl(input);
+  return url !== null && X_HOSTS.has(url.hostname);
+}
+
 /** A bare handle (no @) from @handle, a bare handle, or any profile/status URL. */
 export function extractHandle(input: string): string | null {
   if (!input) return null;

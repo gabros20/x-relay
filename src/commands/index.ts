@@ -1,5 +1,12 @@
 export { COMMANDS, commandNames, type CommandDef } from './registry.ts';
 export {
+  runDoctor,
+  type DoctorOpts,
+  type DoctorDeps,
+  type DoctorCheck,
+  type DoctorReport,
+} from './doctor.ts';
+export {
   runSearch,
   runUser,
   runUserPosts,
@@ -49,3 +56,13 @@ export {
   type FollowResult,
 } from './runners.ts';
 export { buildSearchQuery, type SearchQueryFlags } from './query.ts';
+export {
+  runBatch,
+  runDedupe,
+  type BatchOpts,
+  type BatchDeps,
+  type BatchResult,
+  type BatchQueryResult,
+  type DedupeOpts,
+  type DedupeResult,
+} from './batch.ts';

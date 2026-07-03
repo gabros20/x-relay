@@ -166,6 +166,35 @@ describe('createClient.get', () => {
     expect(result.error.status).toBe(429);
   });
 
+  test('429 exhausted → terminal error carries retryAfterMs from the reset header', async () => {
+    const reset = Math.floor(Date.now() / 1000) + 30;
+    const rl = () =>
+      new Response('rate limited', {
+        status: 429,
+        headers: { 'x-rate-limit-reset': String(reset) },
+      });
+    const fetchImpl = fakeFetch([rl(), rl(), rl(), rl(), rl()]);
+    const client = createClient({
+      cookies: COOKIES,
+      transaction: transactionSpy().fn,
+      fetchImpl: fetchImpl.fn,
+      sleep: sleepSpy().fn,
+      maxRetries: 3,
+    });
+
+    const result = await client.get('SearchTimeline', REQUEST);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected failure');
+    expect(result.error.code).toBe('RATE_LIMITED');
+    expect(result.error.retryAfterMs).toBeDefined();
+    const retryAfterMs = result.error.retryAfterMs;
+    if (retryAfterMs === undefined) throw new Error('no retryAfterMs');
+    // reset is 30s ahead; the ms-until-reset window should land just under 30000.
+    expect(retryAfterMs).toBeGreaterThan(28000);
+    expect(retryAfterMs).toBeLessThanOrEqual(30000);
+  });
+
   test('200 body with errors code 336 → FEATURE_DRIFT naming the op', async () => {
     const fetchImpl = fakeFetch([
       jsonResponse({ errors: [{ code: 336, message: 'The following features cannot be null' }] }),
