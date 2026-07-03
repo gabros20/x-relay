@@ -4,7 +4,6 @@
 // tools. No business logic — delegates to the command runners over one lazily
 // created Engine (cookies auto-extracted from the local browser).
 import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -31,6 +30,7 @@ import {
 } from './commands/index.ts';
 import { type Engine, createEngine } from './engine/index.ts';
 import type { SearchProduct } from './engine/ops.ts';
+import { isMainModule, shouldForceEntry } from './entry.ts';
 import { extractHandle, extractTweetId } from './ids.ts';
 import { toJson } from './output.ts';
 import type { Envelope } from './types.ts';
@@ -319,8 +319,15 @@ export async function main(): Promise<void> {
   await server.connect(new StdioServerTransport());
 }
 
-const isEntry =
-  import.meta.main === true ||
-  (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.argv[1]);
+const isEntry = isMainModule(process.argv[1], import.meta.url, import.meta.main);
 
-if (isEntry) void main();
+// Fail-loud: user clearly invoked the binary but detection said "not entry".
+// Never silently exit 0 in that case — warn to stderr and run anyway.
+const forceEntry = !isEntry && shouldForceEntry(process.argv[1], ['x-relay-mcp', 'mcp-shim.js']);
+if (forceEntry) {
+  process.stderr.write(
+    'x-relay-mcp: entry detection failed — treating as main; report at github.com/gabros20/x-relay/issues\n',
+  );
+}
+
+if (isEntry || forceEntry) void main();
