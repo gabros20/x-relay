@@ -4,8 +4,18 @@ export function ok<T>(command: string, data: T): Ok<T> {
   return { ok: true, command, data };
 }
 
-export function err(command: string, code: string, message: string, hint?: string): Err {
-  const error: Err['error'] = hint !== undefined ? { code, message, hint } : { code, message };
+export function err(
+  command: string,
+  code: string,
+  message: string,
+  hint?: string,
+  status?: number,
+  retryAfterMs?: number,
+): Err {
+  const error: Err['error'] = { code, message };
+  if (hint !== undefined) error.hint = hint;
+  if (status !== undefined) error.status = status;
+  if (retryAfterMs !== undefined) error.retryAfterMs = retryAfterMs;
   return { ok: false, command, error };
 }
 

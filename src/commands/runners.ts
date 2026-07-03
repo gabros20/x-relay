@@ -43,8 +43,10 @@ async function guard<T>(command: string, fn: () => Promise<T>): Promise<Envelope
           ? 'Re-log into x.com in your browser, or set XRELAY_COOKIES.'
           : e.code === 'FEATURE_DRIFT'
             ? 'X rotated its API; refresh the query-ids/features in src/engine/ops.ts.'
-            : undefined;
-      return err(command, e.code, e.message, hint);
+            : e.code === 'RATE_LIMITED'
+              ? 'rate limited — wait retryAfterMs before retrying; serialize queries with 2-5s gaps'
+              : undefined;
+      return err(command, e.code, e.message, hint, e.status, e.retryAfterMs);
     }
     return err(command, 'FETCH_FAILED', e instanceof Error ? e.message : String(e));
   }

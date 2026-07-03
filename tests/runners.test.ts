@@ -547,6 +547,39 @@ describe('runUnfollow', () => {
   });
 });
 
+// ── guard(): rate-limit surfacing (status + retryAfterMs + hint) ──────────────
+
+describe('guard rate-limit surfacing', () => {
+  test('RATE_LIMITED EngineError → envelope carries status, retryAfterMs, and a hint', async () => {
+    const engine = fakeToggleEngine({
+      like: async () => {
+        throw new EngineError('RATE_LIMITED', 'Rate limited; retries exhausted.', 429, 30000);
+      },
+    });
+    const env = await runLike(engine, '1');
+    expect(env.ok).toBe(false);
+    if (env.ok) throw new Error('expected failure');
+    expect(env.error.code).toBe('RATE_LIMITED');
+    expect(env.error.status).toBe(429);
+    expect(env.error.retryAfterMs).toBe(30000);
+    expect(env.error.hint).toBeDefined();
+    expect(env.error.hint).toContain('retryAfterMs');
+  });
+
+  test('non-rate-limit EngineError → status/retryAfterMs absent from the envelope', async () => {
+    const engine = fakeToggleEngine({
+      like: async () => {
+        throw new EngineError('ALREADY_DONE', 'already liked');
+      },
+    });
+    const env = await runLike(engine, '1');
+    expect(env.ok).toBe(false);
+    if (env.ok) throw new Error('expected failure');
+    expect('status' in env.error).toBe(false);
+    expect('retryAfterMs' in env.error).toBe(false);
+  });
+});
+
 // ── runPost / runReply / runQuote with imagePaths ─────────────────────────────
 
 /** Minimal Engine stub for image-attachment tests. */
