@@ -269,6 +269,15 @@ describe('dispatch', () => {
     expect((env.data as { compact?: boolean }).compact).toBe(true);
   });
 
+  test('search --fields with only commas/blanks → INVALID_INPUT (no silent no-op)', async () => {
+    const calls: string[] = [];
+    const env = await dispatch(parseArgs(['search', 'ai', '--fields', ' , ,']), fakeEngine(calls));
+    expect(env.ok).toBe(false);
+    if (env.ok) throw new Error('expected failure');
+    expect(env.error.code).toBe('INVALID_INPUT');
+    expect(calls).toHaveLength(0);
+  });
+
   test('search --sort engagement is accepted (shape untouched, no compact marker)', async () => {
     const calls: string[] = [];
     const env = await dispatch(

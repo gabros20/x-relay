@@ -148,12 +148,15 @@ export type CompactSearchResult = Omit<SearchResult, 'tweets'> & {
 
 /**
  * Validate the output-mode flags before any network call. `--compact` and
- * `--fields` are mutually exclusive, and every `--fields` name must be a known
- * compact field. Returns an INVALID_INPUT envelope on violation, else null.
+ * `--fields` are mutually exclusive; a `--fields` that was passed but resolved to
+ * no valid names is an error (never a silent no-op); and every `--fields` name
+ * must be a known compact field. Returns an INVALID_INPUT envelope on violation,
+ * else null. `fields` being an empty array means the flag was given but empty —
+ * distinct from `fields` being undefined (flag absent).
  */
 function validateSearchOutputMode(opts: SearchCommandOpts): Envelope<never> | null {
-  const hasFields = opts.fields !== undefined && opts.fields.length > 0;
-  if (opts.compact && hasFields) {
+  const fieldsGiven = opts.fields !== undefined;
+  if (opts.compact && fieldsGiven) {
     return err(
       'search',
       'INVALID_INPUT',
@@ -161,9 +164,18 @@ function validateSearchOutputMode(opts: SearchCommandOpts): Envelope<never> | nu
       'pass one output mode, not both',
     );
   }
-  if (hasFields) {
+  if (fieldsGiven) {
+    const fields = opts.fields as string[];
+    if (fields.length === 0) {
+      return err(
+        'search',
+        'INVALID_INPUT',
+        '--fields given but no valid field names',
+        `valid fields: ${COMPACT_FIELDS.join(', ')}`,
+      );
+    }
     const valid = COMPACT_FIELDS as readonly string[];
-    const unknown = (opts.fields as string[]).filter((f) => !valid.includes(f));
+    const unknown = fields.filter((f) => !valid.includes(f));
     if (unknown.length > 0) {
       return err(
         'search',

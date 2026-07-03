@@ -840,6 +840,23 @@ describe('runSearch output modes', () => {
     expect(env.data.tweets[0]).toEqual({ id: 'A', likes: 10 });
   });
 
+  test('fields + sort=engagement projects AND reorders (sort applied before projection)', async () => {
+    const env = await runSearch(fakeSearchEngine(tweets()), {
+      query: 'x',
+      sort: 'engagement',
+      fields: ['id', 'likes'],
+    });
+    expect(env.ok).toBe(true);
+    if (!env.ok) throw new Error('expected success');
+    expect((env.data as { compact?: boolean }).compact).toBe(true);
+    // engagement order B(15), A(10), C(6); each projected to {id, likes}.
+    expect(env.data.tweets).toEqual([
+      { id: 'B', likes: 0 },
+      { id: 'A', likes: 10 },
+      { id: 'C', likes: 0 },
+    ]);
+  });
+
   test('compact + fields together → INVALID_INPUT', async () => {
     const env = await runSearch(fakeSearchEngine(tweets()), {
       query: 'x',
@@ -864,6 +881,14 @@ describe('runSearch output modes', () => {
     const blob = `${env.error.message} ${env.error.hint ?? ''}`;
     expect(blob).toContain('handle');
     expect(blob).toContain('likes');
+  });
+
+  test('fields flag present but empty (parses to []) → INVALID_INPUT, not a silent no-op', async () => {
+    const env = await runSearch(fakeSearchEngine(tweets()), { query: 'x', fields: [] });
+    expect(env.ok).toBe(false);
+    if (env.ok) throw new Error('expected failure');
+    expect(env.error.code).toBe('INVALID_INPUT');
+    expect(`${env.error.message} ${env.error.hint ?? ''}`).toContain('handle');
   });
 
   test('no output-mode flags → untransformed SearchResult (no compact marker)', async () => {

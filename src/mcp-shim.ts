@@ -56,7 +56,10 @@ function wrap(envelope: Envelope<unknown>): ToolResult {
  * exclusive — when fields is given we forward fields and drop the implicit compact.
  */
 function buildMcpSearchOpts(args: Record<string, unknown>): SearchCommandOpts {
-  const useFields = Array.isArray(args.fields) && args.fields.length > 0;
+  // A present `fields` array (even empty) forwards fields and drops the implicit
+  // compact default — an empty array then surfaces as INVALID_INPUT rather than a
+  // silent no-op, matching the CLI. Absent fields falls back to compact.
+  const useFields = Array.isArray(args.fields);
   const outputMode = useFields
     ? { fields: (args.fields as string[]).map(String) }
     : args.compact
