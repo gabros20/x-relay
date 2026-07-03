@@ -59,7 +59,7 @@ serialized, deduped into one archive), then **`dedupe`** to fold in any extra pa
 ```
 printf '%s\n' "prompt engineering" "context engineering" "llm evals" > queries.txt
 xrelay batch --file queries.txt --out corpus.json --delay 3000 --product Latest
-xrelay dedupe corpus.json extra-pass.json --out merged.json --sort engagement
+xrelay dedupe corpus.json extra-pass.json --out merged.json --sort engagement   # extra-pass.json from an earlier sweep
 ```
 
 `batch --out` merges incrementally, so you can re-run it to top up the same file; `dedupe` gives you an offline
@@ -90,8 +90,10 @@ xrelay search "<query>" [--limit N] [--product Top|Latest|Media|People]
   metrics:{likes,retweets,replies,quotes,bookmarks,views}, createdAt, lang, media[], ... }], nextCursor }`.
 - **Output modes** (context-savers for large sweeps):
   - `--sort engagement` — rank results by an engagement score (`likes + replies*3 + bookmarks*2`) before returning.
-  - `--compact` — return flat rows `{ id, url, handle, name, date, text (≤280), likes, replies, bookmarks, views }`
-    with a `compact: true` marker, instead of the full nested envelope. Much cheaper on context for ranking passes.
+  - `--compact` — transform each `tweets[]` entry into a flat row `{ id, url, handle, name, date, text (≤280),
+    likes, replies, bookmarks, views }` (with `name`/`date` omitted when the tweet lacks them) and add a
+    `compact: true` marker — the envelope's `query`/`product`/`nextCursor` are unchanged. Much cheaper on context
+    for ranking passes.
   - `--fields a,b,c` — project each row down to just those compact fields (any of the compact keys above).
     Mutually exclusive with `--compact`; an empty or unknown field name errors loudly (`INVALID_INPUT`).
   - Compact/field-projected output drops the nested author + full metrics — use full output when you need those,
