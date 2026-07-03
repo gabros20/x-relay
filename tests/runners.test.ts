@@ -9,6 +9,7 @@ import {
   runQuote,
   runReply,
   runRetweet,
+  runThread,
   runUnbookmark,
   runUnfollow,
   runUnlike,
@@ -36,6 +37,52 @@ describe('requireConfirmation (destructive-write guard)', () => {
 
   test('returns null (proceed) only when confirmed is exactly true', () => {
     expect(requireConfirmation('delete-tweet', { confirmed: true }, 'delete')).toBeNull();
+  });
+});
+
+// ── runThread (tweet-id resolution / validation) ─────────────────────────────
+
+/** Engine stub whose thread() records the id it was called with. */
+function fakeThreadEngine(calls: string[]): Engine {
+  return {
+    thread: async (id: string) => {
+      calls.push(id);
+      return { root: {}, replies: [] };
+    },
+  } as unknown as Engine;
+}
+
+describe('runThread tweet-id validation', () => {
+  test('malformed X URL → INVALID_INPUT and engine.thread is never called', async () => {
+    const calls: string[] = [];
+    const env = await runThread(fakeThreadEngine(calls), 'https://x.com/someuser');
+    expect(env.ok).toBe(false);
+    if (env.ok) throw new Error('expected failure');
+    expect(env.error.code).toBe('INVALID_INPUT');
+    expect(calls).toHaveLength(0);
+  });
+
+  test('plain garbage string → INVALID_INPUT and engine.thread is never called', async () => {
+    const calls: string[] = [];
+    const env = await runThread(fakeThreadEngine(calls), 'not a tweet');
+    expect(env.ok).toBe(false);
+    if (env.ok) throw new Error('expected failure');
+    expect(env.error.code).toBe('INVALID_INPUT');
+    expect(calls).toHaveLength(0);
+  });
+
+  test('valid bare id → engine.thread called with that id', async () => {
+    const calls: string[] = [];
+    const env = await runThread(fakeThreadEngine(calls), '1234567890');
+    expect(env.ok).toBe(true);
+    expect(calls).toEqual(['1234567890']);
+  });
+
+  test('valid status URL → engine.thread called with the extracted id', async () => {
+    const calls: string[] = [];
+    const env = await runThread(fakeThreadEngine(calls), 'https://x.com/x/status/123456789');
+    expect(env.ok).toBe(true);
+    expect(calls).toEqual(['123456789']);
   });
 });
 

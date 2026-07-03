@@ -31,7 +31,7 @@ import {
 import { type Engine, createEngine } from './engine/index.ts';
 import type { SearchProduct } from './engine/ops.ts';
 import { shouldRunAsEntry } from './entry.ts';
-import { extractHandle, extractTweetId } from './ids.ts';
+import { extractHandle } from './ids.ts';
 import { toJson } from './output.ts';
 import type { Envelope } from './types.ts';
 
@@ -133,13 +133,7 @@ function buildServer(): McpServer {
       description: 'A tweet plus its reply thread — the full read. Use only on finalists.',
       inputSchema: { target: z.string().describe('tweet id or status URL') },
     },
-    async (args) =>
-      wrap(
-        await runThread(
-          getEngine(),
-          extractTweetId(String(args.target ?? '')) ?? String(args.target ?? ''),
-        ),
-      ),
+    async (args) => wrap(await runThread(getEngine(), String(args.target ?? ''))),
   );
 
   const SORT = z.enum(['relevance', 'newest', 'oldest', 'likes', 'views', 'bookmarks']);
@@ -218,7 +212,9 @@ function buildServer(): McpServer {
   const handleIn = { handle: z.string(), limit: N };
   const tweetIn = { target: z.string().describe('tweet id or status URL'), limit: N };
   const h = (v: unknown) => extractHandle(String(v ?? '')) ?? String(v ?? '');
-  const t = (v: unknown) => extractTweetId(String(v ?? '')) ?? String(v ?? '');
+  // Tweet-id runners validate the raw reference themselves (runners.ts), so the
+  // shim forwards the raw string rather than pre-extracting.
+  const t = (v: unknown) => String(v ?? '');
   const n = (v: unknown) => (v !== undefined ? Number(v) : undefined);
 
   server.registerTool(

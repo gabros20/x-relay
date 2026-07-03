@@ -196,6 +196,14 @@ describe('dispatch', () => {
     expect(calls[0]).toBe('thread:123456789');
   });
 
+  test('thread with a malformed X URL is rejected without calling the engine', async () => {
+    const calls: string[] = [];
+    const env = await dispatch(parseArgs(['thread', 'https://x.com/foo']), fakeEngine(calls));
+    expect(env.ok).toBe(false);
+    if (!env.ok) expect(env.error.code).toBe('INVALID_INPUT');
+    expect(calls).toHaveLength(0);
+  });
+
   test('user-posts forwards the replies flag', async () => {
     const calls: string[] = [];
     await dispatch(parseArgs(['user-posts', 'karpathy', '--replies']), fakeEngine(calls));
@@ -210,14 +218,14 @@ describe('dispatch', () => {
     await dispatch(parseArgs(['retweeters', 'https://x.com/x/status/123']), eng);
     await dispatch(parseArgs(['trends', '--woeid', '23424977']), eng);
     await dispatch(parseArgs(['article', 'https://x.com/x/status/999']), eng);
-    await dispatch(parseArgs(['media', '777']), eng);
+    await dispatch(parseArgs(['media', '777888']), eng);
     expect(calls).toEqual([
       'list:1539453138322673664',
       'userMedia:karpathy',
       'retweeters:123',
       'trends:23424977',
       'article:999',
-      'media:777',
+      'media:777888',
     ]);
   });
 

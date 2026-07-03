@@ -275,25 +275,25 @@ function dispatchReadOps(
     case 'following':
       return runFollowing(engine, extractHandle(target) ?? target, limit);
     case 'retweeters':
-      return runRetweeters(engine, extractTweetId(target) ?? target, limit);
+      return runRetweeters(engine, target, limit);
     case 'likers':
-      return runLikers(engine, extractTweetId(target) ?? target, limit);
+      return runLikers(engine, target, limit);
     case 'likes': {
       // Handle is optional — runner falls back to the authenticated user when omitted.
       const likesHandle = target ? (extractHandle(target) ?? target) : undefined;
       return runLikes(engine, likesHandle, limit);
     }
     case 'quoters':
-      return runQuoters(engine, extractTweetId(target) ?? target, limit);
+      return runQuoters(engine, target, limit);
     case 'trends':
       return runTrends(engine, {
         ...(num(parsed, 'woeid') !== undefined ? { woeid: num(parsed, 'woeid') } : {}),
         ...(limit !== undefined ? { limit } : {}),
       });
     case 'article':
-      return runArticle(engine, extractTweetId(target) ?? target);
+      return runArticle(engine, target);
     case 'media':
-      return runMedia(engine, extractTweetId(target) ?? target, first(parsed, 'out'));
+      return runMedia(engine, target, first(parsed, 'out'));
     case 'community':
       return runCommunity(engine, target, limit);
     case 'community-info':
@@ -396,7 +396,7 @@ export async function dispatch(parsed: ParsedArgs, engine: Engine): Promise<Enve
         ...(num(parsed, 'limit') !== undefined ? { limit: num(parsed, 'limit') } : {}),
       });
     case 'thread':
-      return runThread(engine, extractTweetId(target) ?? target);
+      return runThread(engine, target);
     case 'bookmarks': {
       // `bookmarks folders [<id>]` → bookmark folder list or folder timeline
       if (target === 'folders') {
