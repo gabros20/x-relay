@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { extractHandle, extractTweetId } from '../src/ids.ts';
+import { extractHandle, extractTweetId, looksLikeTweetRef } from '../src/ids.ts';
 
 describe('extractTweetId', () => {
   test('accepts a bare snowflake id', () => {
@@ -31,6 +31,41 @@ describe('extractTweetId', () => {
   test('rejects junk', () => {
     expect(extractTweetId('not a tweet')).toBeNull();
     expect(extractTweetId('')).toBeNull();
+  });
+});
+
+describe('looksLikeTweetRef', () => {
+  test('true for an x.com status URL (extract also succeeds)', () => {
+    const url = 'https://x.com/elonmusk/status/1234567890123456789';
+    expect(looksLikeTweetRef(url)).toBe(true);
+    expect(extractTweetId(url)).toBe('1234567890123456789');
+  });
+
+  test('true for an x.com URL without a status segment (extract fails)', () => {
+    expect(looksLikeTweetRef('https://x.com/someuser')).toBe(true);
+    expect(extractTweetId('https://x.com/someuser')).toBeNull();
+  });
+
+  test('true for a status URL with an empty id (extract fails)', () => {
+    expect(looksLikeTweetRef('https://x.com/user/status/')).toBe(true);
+    expect(extractTweetId('https://x.com/user/status/')).toBeNull();
+  });
+
+  test('true for a bare snowflake id', () => {
+    expect(looksLikeTweetRef('1234567890')).toBe(true);
+  });
+
+  test('true for twitter.com and mobile.twitter.com hosts', () => {
+    expect(looksLikeTweetRef('https://twitter.com/jack/status/20')).toBe(true);
+    expect(looksLikeTweetRef('https://mobile.twitter.com/user/status/555')).toBe(true);
+  });
+
+  test('false for non-URL garbage', () => {
+    expect(looksLikeTweetRef('foo bar')).toBe(false);
+  });
+
+  test('false for a non-X URL', () => {
+    expect(looksLikeTweetRef('https://example.com/status/123')).toBe(false);
   });
 });
 
