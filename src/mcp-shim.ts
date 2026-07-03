@@ -8,7 +8,9 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import {
+  type ArchiveCommandOpts,
   type SearchCommandOpts,
+  runArchive,
   runArticle,
   runBatch,
   runBookmarks,
@@ -30,6 +32,7 @@ import {
   runUser,
   runUserMedia,
   runUserPosts,
+  runWhoami,
 } from './commands/index.ts';
 import { type Engine, createEngine } from './engine/index.ts';
 import type { SearchProduct } from './engine/ops.ts';
@@ -81,6 +84,30 @@ function buildMcpSearchOpts(args: Record<string, unknown>): SearchCommandOpts {
     ...(Array.isArray(args.filter) ? { filter: args.filter.map(String) } : {}),
     ...(args.sort ? { sort: args.sort as 'engagement' } : {}),
     ...outputMode,
+  };
+}
+
+/**
+ * Map the MCP archive tool args to ArchiveCommandOpts. Mirrors `runArchive`'s
+ * CLI surface for the read targets, with two MCP-specific rules: `out` is always
+ * carried (the archive is written to disk — there is no stdout streaming mode),
+ * and `stdout` is never set. A @handle / profile URL is normalized to a bare
+ * handle, matching `buildArchiveOpts` in cli.ts.
+ */
+export function buildMcpArchiveOpts(args: Record<string, unknown>): ArchiveCommandOpts {
+  return {
+    target: String(args.target ?? ''),
+    out: String(args.out ?? ''),
+    ...(args.query !== undefined ? { query: String(args.query) } : {}),
+    ...(args.handle ? { handle: extractHandle(String(args.handle)) ?? String(args.handle) } : {}),
+    ...(args.listId ? { listId: String(args.listId) } : {}),
+    ...(args.limit !== undefined ? { limit: Number(args.limit) } : {}),
+    ...(args.full ? { full: true } : {}),
+    ...(args.since ? { since: String(args.since) } : {}),
+    ...(args.replies ? { replies: true } : {}),
+    ...(args.product ? { product: args.product as SearchProduct } : {}),
+    ...(args.following ? { following: true } : {}),
+    ...(args.folderId ? { folderId: String(args.folderId) } : {}),
   };
 }
 
@@ -379,6 +406,53 @@ function buildServer(): McpServer {
           quiet: true, // no stderr progress over the MCP stdio transport
         }),
       ),
+  );
+
+  server.registerTool(
+    'archive',
+    {
+      description:
+        'Archive full-fidelity tweet JSON to a local file and return the summary {added, total, out}. Sweeps a read target — bookmarks | user | my-posts | search | list | likes | feed — and writes the complete records to disk (nothing large is streamed back). Re-running the same `out` is incremental: only new tweets are added (pass full=true to rebuild). `out` is REQUIRED over MCP. For the search target, X advanced operators can be embedded directly in `query`.',
+      inputSchema: {
+        target: z
+          .enum(['bookmarks', 'user', 'my-posts', 'search', 'list', 'likes', 'feed'])
+          .describe('which read target to archive'),
+        out: z.string().describe('output archive file path (required)'),
+        query: z.string().describe('search text (search target)').optional(),
+        handle: z
+          .string()
+          .describe('@handle, bare handle, or URL (required for user; optional for likes)')
+          .optional(),
+        listId: z.string().describe('Twitter List id (list target)').optional(),
+        limit: z.number().int().positive().describe('max tweets to fetch this run').optional(),
+        full: z
+          .boolean()
+          .describe('full rebuild — ignore prior ids and page up to limit')
+          .optional(),
+        since: z.string().describe('YYYY-MM-DD — drop tweets older than this').optional(),
+        replies: z.boolean().describe('include replies (user / my-posts targets)').optional(),
+        product: z
+          .enum(['Top', 'Latest', 'Media', 'People'])
+          .describe('search tab (search target)')
+          .optional(),
+        following: z
+          .boolean()
+          .describe('following/chronological timeline (feed target)')
+          .optional(),
+        folderId: z.string().describe('bookmark folder id (bookmarks target)').optional(),
+      },
+    },
+    async (args) => wrap(await runArchive(getEngine(), buildMcpArchiveOpts(args))),
+  );
+
+  server.registerTool(
+    'whoami',
+    {
+      description:
+        'Who am I? Returns the authenticated account profile the login cookies resolve to (handle, name, id, counts) — confirm the active identity before other calls.',
+      inputSchema: {},
+    },
+    async () => wrap(await runWhoami(getEngine())),
   );
 
   return server;
