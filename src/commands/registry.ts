@@ -59,7 +59,7 @@ export const COMMANDS: CommandDef[] = [
     name: 'sync',
     cost: 'medium — incremental',
     summary: 'Pull only NEW bookmarks/posts since the last sync into the local cache.',
-    usage: 'xrelay sync bookmarks|posts|all [--handle <you>] [--repair]',
+    usage: 'xrelay sync bookmarks|posts|all [--handle <you>] [--repair] [--max N]',
   },
   {
     name: 'list',
