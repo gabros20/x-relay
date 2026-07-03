@@ -1,3 +1,27 @@
+# [1.5.0](https://github.com/gabros20/x-relay/compare/v1.4.0...v1.5.0) (2026-07-03)
+
+
+### Bug Fixes
+
+* **batch:** loud invalid dedupe sort, per-query error messages, merge-into-existing coverage ([f40a1d7](https://github.com/gabros20/x-relay/commit/f40a1d7d57c0cee2a8c0c0b5e4ed763398de762b))
+* **cli:** only force-entry when import.meta.main is undefined; test cleanup ([ec06533](https://github.com/gabros20/x-relay/commit/ec06533942a8d30d35f73ff964b6bc1df7aef6cb))
+* **cli:** robust main-module detection via realpath; never silently exit under npm bin symlink ([07e364a](https://github.com/gabros20/x-relay/commit/07e364a62fed9b9b541ca2309d8e9ea57ac015a6))
+* **doctor:** bound live checks with a timeout; cover entry symlink detail ([a1cb016](https://github.com/gabros20/x-relay/commit/a1cb0166e8e41185560b428e8ca596d2c6085949))
+* **search:** reject empty --fields; cover fields+sort combination ([70855b3](https://github.com/gabros20/x-relay/commit/70855b34ebe0b8eed14c06d96c41f214ce6e8319))
+* **sync:** document --max in usage string ([2f8eb6c](https://github.com/gabros20/x-relay/commit/2f8eb6c45c471befc3141f5e3a3491af71a43411))
+* **thread:** reject unparseable tweet references with INVALID_INPUT instead of empty results ([e1cef51](https://github.com/gabros20/x-relay/commit/e1cef51d831f7f8c65dc99bb2f6b688f2fa03620))
+
+
+### Features
+
+* **batch:** serialized multi-query batch with dedupe, stderr progress and --quiet ([43e5049](https://github.com/gabros20/x-relay/commit/43e5049a3a06a463e17cd89dd38b3a7353d1a7e9))
+* **doctor:** environment, cookie, auth and search diagnostics command ([eed3d9f](https://github.com/gabros20/x-relay/commit/eed3d9f0358784050f71732d97ef02aaea5c694c))
+* **engine:** surface rateLimited status and retryAfterMs in error envelope ([92a06b7](https://github.com/gabros20/x-relay/commit/92a06b779969f52af04fb78f8f84dca507891a0e))
+* **ids:** classify tweet-reference inputs to enable strict validation ([56a6701](https://github.com/gabros20/x-relay/commit/56a6701a1194e4288425e29a988446723cf47ced))
+* **mcp:** expose archive and whoami tools ([0b43b81](https://github.com/gabros20/x-relay/commit/0b43b81f8de232d430f4a7e3b964c9e9b01327ad))
+* **search:** --sort engagement, --compact and --fields output modes ([b7bae10](https://github.com/gabros20/x-relay/commit/b7bae1064748f529fbdba6a47ce3a999ca0c8574))
+* **search:** add engagement scoring, compact and field-projection helpers ([47dd509](https://github.com/gabros20/x-relay/commit/47dd509dc0f557c71a44d75e78050d413f3b3fa9))
+
 # [1.4.0](https://github.com/gabros20/x-relay/compare/v1.3.0...v1.4.0) (2026-06-14)
 
 
