@@ -48,7 +48,7 @@ import type { SearchQueryFlags } from './commands/query.ts';
 import { COMMANDS, commandNames } from './commands/registry.ts';
 import { type Engine, createEngine } from './engine/index.ts';
 import type { SearchProduct } from './engine/ops.ts';
-import { isMainModule, shouldForceEntry } from './entry.ts';
+import { shouldRunAsEntry } from './entry.ts';
 import { extractHandle, extractTweetId } from './ids.ts';
 import { err, toJson } from './output.ts';
 import type { Envelope } from './types.ts';
@@ -460,18 +460,16 @@ export async function run(argv: string[], engine?: Engine): Promise<number> {
   return envelope.ok ? 0 : 1;
 }
 
-const isEntry = isMainModule(process.argv[1], import.meta.url, import.meta.main);
+// Fail-loud: when the runtime gives no definitive answer and the invocation
+// looks like our binary, run anyway (after a stderr warning) — never silently
+// exit 0 under the npm bin symlink.
+const entry = shouldRunAsEntry(process.argv[1], import.meta.url, import.meta.main, [
+  'xrelay',
+  'cli.js',
+]);
+if (entry.warning !== undefined) process.stderr.write(`${entry.warning}\n`);
 
-// Fail-loud: user clearly invoked the binary but detection said "not entry".
-// Never silently exit 0 in that case — warn to stderr and run anyway.
-const forceEntry = !isEntry && shouldForceEntry(process.argv[1], ['xrelay', 'cli.js']);
-if (forceEntry) {
-  process.stderr.write(
-    'xrelay: entry detection failed — treating as main; report at github.com/gabros20/x-relay/issues\n',
-  );
-}
-
-if (isEntry || forceEntry) {
+if (entry.run) {
   run(process.argv.slice(2)).then(
     (code) => {
       process.exitCode = code;

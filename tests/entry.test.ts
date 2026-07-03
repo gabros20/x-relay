@@ -1,9 +1,19 @@
-import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { afterEach, describe, expect, test } from 'bun:test';
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { isMainModule, shouldForceEntry } from '../src/entry.ts';
+import { isMainModule, shouldForceEntry, shouldRunAsEntry } from '../src/entry.ts';
+
+const tmpDirs: string[] = [];
+function makeTmpDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'xrelay-entry-'));
+  tmpDirs.push(dir);
+  return dir;
+}
+afterEach(() => {
+  for (const dir of tmpDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
 
 describe('isMainModule', () => {
   test('importMetaMain === true short-circuits to true', () => {
@@ -17,14 +27,14 @@ describe('isMainModule', () => {
   });
 
   test('equal plain paths → true (import.meta.main undefined)', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'xrelay-entry-'));
+    const dir = makeTmpDir();
     const file = join(dir, 'cli.js');
     writeFileSync(file, '// x');
     expect(isMainModule(file, pathToFileURL(file).href, undefined)).toBe(true);
   });
 
   test('unequal plain paths → false', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'xrelay-entry-'));
+    const dir = makeTmpDir();
     const a = join(dir, 'a.js');
     const b = join(dir, 'b.js');
     writeFileSync(a, '// a');
@@ -33,7 +43,7 @@ describe('isMainModule', () => {
   });
 
   test('symlink argv1 resolves to real module path → true', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'xrelay-entry-'));
+    const dir = makeTmpDir();
     const real = join(dir, 'cli.js');
     const link = join(dir, 'xrelay');
     writeFileSync(real, '// real');
@@ -68,5 +78,56 @@ describe('shouldForceEntry', () => {
 
   test('undefined argv1 → false', () => {
     expect(shouldForceEntry(undefined, ['xrelay', 'cli.js'])).toBe(false);
+  });
+});
+
+describe('shouldRunAsEntry', () => {
+  const BINS = ['xrelay', 'cli.js'];
+
+  test('detected as main → run, no warning', () => {
+    expect(shouldRunAsEntry('/anything', 'file:///different', true, BINS)).toEqual({
+      run: true,
+      warning: undefined,
+    });
+  });
+
+  test('undefined runtime answer + matching bin basename → force-run with warning', () => {
+    const decision = shouldRunAsEntry(
+      '/usr/local/bin/xrelay',
+      'file:///real/cli.js',
+      undefined,
+      BINS,
+    );
+    expect(decision.run).toBe(true);
+    expect(decision.warning).toBe(
+      'xrelay: entry detection failed — treating as main; report at github.com/gabros20/x-relay/issues',
+    );
+  });
+
+  test('warning label comes from binNames[0]', () => {
+    const decision = shouldRunAsEntry(
+      '/usr/local/bin/x-relay-mcp',
+      'file:///real/mcp-shim.js',
+      undefined,
+      ['x-relay-mcp', 'mcp-shim.js'],
+    );
+    expect(decision.warning).toBe(
+      'x-relay-mcp: entry detection failed — treating as main; report at github.com/gabros20/x-relay/issues',
+    );
+  });
+
+  test('import.meta.main === false is authoritative — never force-run even with matching basename', () => {
+    // The definitive-false gap: a runtime that explicitly says "not main" must
+    // NOT be overridden by the bin-basename heuristic.
+    expect(shouldRunAsEntry('/usr/local/bin/xrelay', 'file:///real/cli.js', false, BINS)).toEqual({
+      run: false,
+      warning: undefined,
+    });
+  });
+
+  test('undefined runtime answer + non-matching basename → no run, no warning', () => {
+    expect(
+      shouldRunAsEntry('/usr/local/bin/other', 'file:///real/cli.js', undefined, BINS),
+    ).toEqual({ run: false, warning: undefined });
   });
 });

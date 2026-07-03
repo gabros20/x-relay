@@ -30,7 +30,7 @@ import {
 } from './commands/index.ts';
 import { type Engine, createEngine } from './engine/index.ts';
 import type { SearchProduct } from './engine/ops.ts';
-import { isMainModule, shouldForceEntry } from './entry.ts';
+import { shouldRunAsEntry } from './entry.ts';
 import { extractHandle, extractTweetId } from './ids.ts';
 import { toJson } from './output.ts';
 import type { Envelope } from './types.ts';
@@ -319,15 +319,13 @@ export async function main(): Promise<void> {
   await server.connect(new StdioServerTransport());
 }
 
-const isEntry = isMainModule(process.argv[1], import.meta.url, import.meta.main);
+// Fail-loud: when the runtime gives no definitive answer and the invocation
+// looks like our binary, run anyway (after a stderr warning) — never silently
+// exit 0 under the npm bin symlink.
+const entry = shouldRunAsEntry(process.argv[1], import.meta.url, import.meta.main, [
+  'x-relay-mcp',
+  'mcp-shim.js',
+]);
+if (entry.warning !== undefined) process.stderr.write(`${entry.warning}\n`);
 
-// Fail-loud: user clearly invoked the binary but detection said "not entry".
-// Never silently exit 0 in that case — warn to stderr and run anyway.
-const forceEntry = !isEntry && shouldForceEntry(process.argv[1], ['x-relay-mcp', 'mcp-shim.js']);
-if (forceEntry) {
-  process.stderr.write(
-    'x-relay-mcp: entry detection failed — treating as main; report at github.com/gabros20/x-relay/issues\n',
-  );
-}
-
-if (isEntry || forceEntry) void main();
+if (entry.run) void main();

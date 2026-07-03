@@ -12,9 +12,9 @@ export default defineConfig({
   clean: true,
   target: 'node18',
   // No code splitting: each entry is self-contained, so the in-source entry
-  // guard (`fileURLToPath(import.meta.url) === process.argv[1]`) matches when a
-  // bin is run as `node dist/cli.js`. With splitting on, that guard would live
-  // in a shared chunk whose URL never matches argv[1].
+  // guard (`shouldRunAsEntry` in src/entry.ts, inlined into each bundle) resolves
+  // import.meta.url against argv[1] via realpath when a bin is run. With splitting
+  // on, that guard would live in a shared chunk whose URL never matches argv[1].
   splitting: false,
   sourcemap: true,
   outDir: 'dist',

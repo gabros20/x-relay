@@ -29,7 +29,8 @@ export function isMainModule(
   try {
     return realpathSync(argv1) === realpathSync(modulePath);
   } catch {
-    // A path didn't exist — fall back to a plain string compare.
+    // realpath failed (path missing, permission, etc.) — fall back to a plain
+    // string compare.
     return argv1 === modulePath;
   }
 }
@@ -42,4 +43,36 @@ export function isMainModule(
 export function shouldForceEntry(argv1: string | undefined, binNames: string[]): boolean {
   if (argv1 === undefined) return false;
   return binNames.includes(basename(argv1));
+}
+
+export interface EntryDecision {
+  /** Whether the entry file should run its main routine. */
+  run: boolean;
+  /** A stderr warning to print first, or undefined when detection was clean. */
+  warning: string | undefined;
+}
+
+/**
+ * Consolidated entry decision. Runs when detected as main. Otherwise, ONLY when
+ * the runtime gave no definitive answer (import.meta.main === undefined) and the
+ * basename looks like one of our binaries, force-runs with a fail-loud warning —
+ * an explicit import.meta.main === false is authoritative and never overridden.
+ * binNames[0] is used as the label in the warning (the user-facing bin name).
+ */
+export function shouldRunAsEntry(
+  argv1: string | undefined,
+  moduleUrl: string,
+  importMetaMain: boolean | undefined,
+  binNames: string[],
+): EntryDecision {
+  if (isMainModule(argv1, moduleUrl, importMetaMain)) {
+    return { run: true, warning: undefined };
+  }
+  if (importMetaMain === undefined && shouldForceEntry(argv1, binNames)) {
+    return {
+      run: true,
+      warning: `${binNames[0]}: entry detection failed — treating as main; report at github.com/gabros20/x-relay/issues`,
+    };
+  }
+  return { run: false, warning: undefined };
 }
