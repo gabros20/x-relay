@@ -66,7 +66,8 @@ wrapped in `engine/`; keep any live smoke test out of unit CI.
   and a `(336) features cannot be null` response must fail loudly ("refresh ops config"), not silently.
 - The transaction-id init scrapes X's web bundle; re-init on a timer and on the first 403/404.
 - Assumes a residential IP (local agent); datacenter/cloud IPs get blocked. Any account used can be
-  rate-limited or banned — single-account, read-only, jittered. Document the risk; never promise safety.
+  rate-limited or banned — single-account, jittered, and writing only on explicit command. Document the risk;
+  never promise safety.
 
 ## Key Reference Documentation
 
