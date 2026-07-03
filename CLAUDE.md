@@ -18,7 +18,9 @@ Sibling project to `../youtube-context` (`youtube-relay-mcp`); same stack, shape
 ## Architecture
 
 - `src/cli.ts` — CLI entry (`xrelay`); parses args, dispatches a command, prints a JSON envelope to stdout.
-- `src/mcp-shim.ts` — MCP server entry (`x-relay-mcp`); same commands as MCP tools. Thin, no business logic.
+- `src/mcp-shim.ts` — MCP server entry (`x-relay-mcp`); read-only subset of commands as MCP tools. Thin, no business logic.
+- `src/entry.ts` — pure main-module detection (`shouldRunAsEntry`); resolves symlinks so the npm bin shim runs
+  instead of silently exiting, and fails loud when detection is ambiguous. Used by both entry points.
 - `src/index.ts` — library exports.
 - `src/engine/` — the ONLY place that talks to X's network. `xctid/` (vendored + ported
   x-client-transaction-id), `auth.ts` (header builder), `ops.ts` (externalized queryId + features config),
@@ -27,6 +29,10 @@ Sibling project to `../youtube-context` (`youtube-relay-mcp`); same stack, shape
   testable.
 - `src/cache/` — independent local store under `~/.xrelay` + snowflake-watermark incremental sync.
 - `src/commands/registry.ts` — single source of truth for command definitions; drives CLI + SKILL generation.
+  `commands/` also holds each runner plus the multi-step `doctor.ts` (setup diagnostics) and `batch.ts`
+  (serialized multi-query sweep + dedupe).
+- `src/format.ts` — pure presentation helpers: engagement scoring, `--compact` flat rows, `--fields` projection.
+- `src/progress.ts` — stderr progress reporter for long-running commands (`--quiet` silences it; stdout stays JSON-only).
 - `src/ids.ts` / `src/output.ts` / `src/types.ts` — pure helpers + envelope + domain types. No I/O.
 - `scripts/generate-skill.ts` — reads `.claude/skills/x-relay/SKILL.md`, emits `src/generated/*`.
 
@@ -51,7 +57,9 @@ wrapped in `engine/`; keep any live smoke test out of unit CI.
 
 ## Constraints
 
-- Read-only research tool: search, profiles, threads, metadata, local cache. No posting/liking/following in v1.
+- Read + archive + write tool. Reads (search, profiles, threads, metadata, local cache, archiving) plus confirmed
+  write commands on the CLI (post/reply/quote/like/unlike/bookmark/unbookmark/retweet/unretweet/follow/unfollow,
+  and `delete` behind `--confirm`). The MCP tool surface stays read-only by design; `dedupe` is CLI-only.
 - Auth is cookie-based (`auth_token` + `ct0`) via `XRELAY_COOKIES` env / cookie file / browser extract. The
   password `login()` onboarding flow (Castle.io + JS instrumentation) is deferred — it's the fragile part.
 - Query-ids and the `features` blob ROTATE — they live in `src/engine/ops.ts` config, never hardcoded in logic,
