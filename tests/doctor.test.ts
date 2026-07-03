@@ -130,6 +130,41 @@ describe('runDoctor', () => {
     expect(env.data.healthy).toBe(false);
   });
 
+  test('entry check reports symlink → realpath when isSymlink is true', async () => {
+    const env = await runDoctor(
+      stubEngine({}),
+      {},
+      greenDeps({
+        argv1: '/usr/local/bin/xrelay',
+        realpath: () => '/opt/x-relay/dist/cli.js',
+        isSymlink: () => true,
+      }),
+    );
+    if (!env.ok) throw new Error('expected Ok envelope');
+    const entry = byName(env.data, 'entry');
+    expect(entry?.ok).toBe(true);
+    expect(entry?.detail).toContain('/usr/local/bin/xrelay');
+    expect(entry?.detail).toContain('symlink → /opt/x-relay/dist/cli.js');
+  });
+
+  test('a live check that never resolves times out → failed check, search still attempted, doctor resolves', async () => {
+    const calls: string[] = [];
+    const env = await runDoctor(
+      stubEngine({ whoami: () => new Promise<never>(() => {}) }, calls),
+      {},
+      greenDeps({ timeoutMs: 10 }),
+    );
+    expect(env.ok).toBe(true);
+    if (!env.ok) throw new Error('expected Ok envelope');
+    const auth = byName(env.data, 'auth');
+    expect(auth?.ok).toBe(false);
+    expect(auth?.detail).toContain('timed out');
+    expect(auth?.detail).toContain('10ms');
+    // search still runs after the auth timeout.
+    expect(calls).toContain('search');
+    expect(env.data.healthy).toBe(false);
+  });
+
   test('--offline: auth + search skipped, no engine calls, healthy from remaining checks', async () => {
     const calls: string[] = [];
     const env = await runDoctor(stubEngine({}, calls), { offline: true }, greenDeps());

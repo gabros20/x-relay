@@ -34,6 +34,7 @@ export {
   runArticle,
   runMedia,
   runDoctor,
+  type DoctorOpts,
   type DoctorReport,
   type DoctorCheck,
   buildSearchQuery,

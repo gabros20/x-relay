@@ -15,6 +15,9 @@ import { type Engine, EngineError } from '../engine/index.ts';
 import { err, ok } from '../output.ts';
 import type { Envelope } from '../types.ts';
 
+/** Default per-check deadline for the live (auth/search) checks. */
+const DEFAULT_TIMEOUT_MS = 15000;
+
 /** One diagnostic check's outcome. `ok: false` is a normal, expected result. */
 export interface DoctorCheck {
   name: string;
@@ -53,6 +56,8 @@ export interface DoctorDeps {
   nodeVersion?: string;
   /** Monotonic clock for latency, in ms (defaults to Date.now). */
   now?: () => number;
+  /** Per-check deadline for the live checks, in ms (defaults to DEFAULT_TIMEOUT_MS). */
+  timeoutMs?: number;
   /** Resolve a path through symlinks (defaults to realpathSync). */
   realpath?: (p: string) => string;
   /** Whether a path is a symlink (defaults to lstatSync().isSymbolicLink()). */
@@ -197,6 +202,29 @@ function skipped(name: string): DoctorCheck {
 }
 
 /**
+ * Bound a live check with a deadline. The Engine API takes no AbortSignal, so a
+ * hung request would otherwise hang doctor forever — instead we race the check
+ * against a timer and, on a stall, resolve to a failed check. The underlying
+ * request may keep running; that's fine for a diagnostics CLI that exits right
+ * after. The check itself never rejects (both live checks catch internally), so
+ * the race only ever resolves.
+ */
+function withTimeout(
+  work: Promise<DoctorCheck>,
+  name: string,
+  timeoutMs: number,
+): Promise<DoctorCheck> {
+  let timer: ReturnType<typeof setTimeout>;
+  const deadline = new Promise<DoctorCheck>((resolve) => {
+    timer = setTimeout(
+      () => resolve({ name, ok: false, detail: `timed out after ${timeoutMs}ms` }),
+      timeoutMs,
+    );
+  });
+  return Promise.race([work, deadline]).finally(() => clearTimeout(timer));
+}
+
+/**
  * Run every diagnostic check and assemble the report. Always resolves to an Ok
  * envelope (a failing check lives in the payload); the try/catch only guards the
  * unreachable case of doctor itself crashing.
@@ -208,11 +236,14 @@ export async function runDoctor(
 ): Promise<Envelope<DoctorReport>> {
   try {
     const offline = opts.offline === true;
+    const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const checks: DoctorCheck[] = [
       checkEntry(deps),
       checkCookies(deps),
-      offline ? skipped('auth') : await checkAuth(engine),
-      offline ? skipped('search') : await checkSearch(engine, deps),
+      offline ? skipped('auth') : await withTimeout(checkAuth(engine), 'auth', timeoutMs),
+      offline
+        ? skipped('search')
+        : await withTimeout(checkSearch(engine, deps), 'search', timeoutMs),
       checkGuidance(),
     ];
 
