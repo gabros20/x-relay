@@ -5,7 +5,7 @@ import { InterpolationInputError } from '../src/engine/xctid/errors.ts';
 import { interpolate } from '../src/engine/xctid/interpolate.ts';
 import { convertRotationToMatrix } from '../src/engine/xctid/rotation.ts';
 import { assembleTransactionId } from '../src/engine/xctid/transaction.ts';
-import { floatToHex, isOdd } from '../src/engine/xctid/utils.ts';
+import { floatToHex, handleXMigration, isOdd } from '../src/engine/xctid/utils.ts';
 
 describe('isOdd', () => {
   test('odd -> -1, even -> 0', () => {
@@ -111,5 +111,69 @@ describe('assembleTransactionId', () => {
     const bytes = [...Buffer.from(id, 'base64')];
     // 1 head + 2 key + 4 time + 16 hash + 1 trailing = 24
     expect(bytes.length).toBe(24);
+  });
+});
+
+describe('handleXMigration', () => {
+  // A minimal X shell; `withRuntime` toggles whether it carries the `ondemand.s`
+  // manifest the transaction-id generator needs (the legacy responsive-web shell)
+  // or the newer "x-web" logged-out shell that dropped it.
+  const shell = (marker: string, withRuntime: boolean): string => {
+    const runtime = withRuntime ? 'chunk={"ondemand.s":1}' : 'src="entry-client-logged-out.js"';
+    return `<html><head><meta name="twitter-site-verification" content="k"/><script>${runtime}</script></head><body>${marker}</body></html>`;
+  };
+
+  const fakeFetch = (routes: (url: string) => string, seen?: string[]): typeof fetch =>
+    (async (url: string | URL | Request): Promise<Response> => {
+      const u = typeof url === 'string' ? url : url.toString();
+      seen?.push(u);
+      return new Response(routes(u), { status: 200 });
+    }) as unknown as typeof fetch;
+
+  test('skips a migrated path and returns the first shell that carries the runtime', async () => {
+    const seen: string[] = [];
+    const fetchImpl = fakeFetch((u) => {
+      if (u.endsWith('/i/flow/login')) return shell('login', false); // migrated → no runtime
+      if (u.endsWith('/home')) return shell('home', true); // legacy → has runtime
+      return shell('explore', true);
+    }, seen);
+
+    const doc = await handleXMigration(fetchImpl);
+    expect(doc.documentElement.outerHTML).toContain('ondemand.s');
+    expect(doc.documentElement.outerHTML).toContain('home');
+    // stops at /home; never falls through to /explore
+    expect(seen.some((u) => u.endsWith('/i/flow/login'))).toBe(true);
+    expect(seen.some((u) => u.endsWith('/home'))).toBe(true);
+    expect(seen.some((u) => u.endsWith('/explore'))).toBe(false);
+  });
+
+  test('returns the first shell immediately when it already carries the runtime', async () => {
+    const seen: string[] = [];
+    const fetchImpl = fakeFetch(() => shell('login', true), seen);
+    const doc = await handleXMigration(fetchImpl);
+    expect(doc.documentElement.outerHTML).toContain('ondemand.s');
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.endsWith('/i/flow/login')).toBe(true);
+  });
+
+  test('falls back to the last fetched document when no path carries the runtime', async () => {
+    const fetchImpl = fakeFetch((u) =>
+      u.endsWith('/explore') ? shell('explore-last', false) : shell('other', false),
+    );
+    const doc = await handleXMigration(fetchImpl);
+    // last path tried is /explore → its document is returned even without the runtime,
+    // so the downstream generator throws the precise ondemand error, not a transport one.
+    expect(doc.documentElement.outerHTML).toContain('explore-last');
+  });
+
+  test('rethrows when every candidate fetch fails', async () => {
+    const fetchImpl = (async (): Promise<Response> =>
+      new Response('nope', {
+        status: 503,
+        statusText: 'Service Unavailable',
+      })) as unknown as typeof fetch;
+    await expect(handleXMigration(fetchImpl)).rejects.toMatchObject({
+      code: 'X_HOMEPAGE_FETCH_ERROR',
+    });
   });
 });

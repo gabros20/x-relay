@@ -12,6 +12,7 @@ import { lstatSync, realpathSync } from 'node:fs';
 import type { Cookies } from '../engine/auth.ts';
 import { getCookies } from '../engine/cookies.ts';
 import { type Engine, EngineError } from '../engine/index.ts';
+import { ON_DEMAND_MARKER, handleXMigration } from '../engine/xctid/index.ts';
 import { err, ok } from '../output.ts';
 import type { Envelope } from '../types.ts';
 
@@ -58,6 +59,8 @@ export interface DoctorDeps {
   now?: () => number;
   /** Per-check deadline for the live checks, in ms (defaults to DEFAULT_TIMEOUT_MS). */
   timeoutMs?: number;
+  /** Fetch implementation for the bootstrap check (defaults to global fetch). */
+  fetchImpl?: typeof fetch;
   /** Resolve a path through symlinks (defaults to realpathSync). */
   realpath?: (p: string) => string;
   /** Whether a path is a symlink (defaults to lstatSync().isSymbolicLink()). */
@@ -140,6 +143,39 @@ function checkCookies(deps: DoctorDeps): DoctorCheck {
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     return { name: 'cookies', ok: false, detail: `source=${source}${sourceNote}; ${message}` };
+  }
+}
+
+/**
+ * bootstrap: can we fetch an X shell that still carries the responsive-web runtime
+ * the x-client-transaction-id generator initializes from? X periodically migrates
+ * its frontend (e.g. the "x-web" logged-out shell that dropped the `ondemand.s`
+ * manifest from the root path), which otherwise surfaces as an opaque FETCH_FAILED
+ * on search and a misleading "not logged in" on auth. This check names that drift
+ * directly. Any error becomes a failed check, never a throw.
+ */
+async function checkBootstrap(deps: DoctorDeps): Promise<DoctorCheck> {
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  try {
+    const document = await handleXMigration(fetchImpl);
+    if (!document.documentElement.outerHTML.includes(ON_DEMAND_MARKER)) {
+      return {
+        name: 'bootstrap',
+        ok: false,
+        detail:
+          'X shell fetched but the transaction-id runtime (ondemand chunk) is absent — ' +
+          'X frontend drift; update the bootstrap paths in src/engine/xctid/utils.ts.',
+      };
+    }
+    return {
+      name: 'bootstrap',
+      ok: true,
+      detail: 'X responsive-web shell resolved; transaction-id runtime present.',
+    };
+  } catch (e) {
+    const code = e instanceof Error ? ((e as { code?: string }).code ?? 'ERROR') : 'ERROR';
+    const message = e instanceof Error ? e.message : String(e);
+    return { name: 'bootstrap', ok: false, detail: `${code}: ${message}` };
   }
 }
 
@@ -240,6 +276,9 @@ export async function runDoctor(
     const checks: DoctorCheck[] = [
       checkEntry(deps),
       checkCookies(deps),
+      offline
+        ? skipped('bootstrap')
+        : await withTimeout(checkBootstrap(deps), 'bootstrap', timeoutMs),
       offline ? skipped('auth') : await withTimeout(checkAuth(engine), 'auth', timeoutMs),
       offline
         ? skipped('search')
@@ -250,7 +289,7 @@ export async function runDoctor(
     const failed = checks.filter((c) => !c.ok).map((c) => c.name);
     const healthy = failed.length === 0;
     const summary = healthy
-      ? `all ${checks.length} checks passed${offline ? ' (offline — auth/search skipped)' : ''}`
+      ? `all ${checks.length} checks passed${offline ? ' (offline — bootstrap/auth/search skipped)' : ''}`
       : `${failed.length} check(s) failed: ${failed.join(', ')}`;
 
     return ok('doctor', { healthy, checks, summary });

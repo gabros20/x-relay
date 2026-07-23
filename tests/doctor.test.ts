@@ -46,6 +46,11 @@ function greenDeps(overrides: Partial<DoctorDeps> = {}): DoctorDeps {
     now,
     realpath: () => '/real/dist/cli.js',
     isSymlink: () => true,
+    // A shell that carries the `ondemand.s` runtime → bootstrap check passes.
+    fetchImpl: (async () =>
+      new Response('<html><head><script>var c="ondemand.s"</script></head><body>ok</body></html>', {
+        status: 200,
+      })) as unknown as typeof fetch,
     ...overrides,
   };
 }
@@ -60,15 +65,17 @@ describe('runDoctor', () => {
     expect(env.command).toBe('doctor');
     const report = env.data;
     expect(report.healthy).toBe(true);
-    expect(report.checks).toHaveLength(5);
+    expect(report.checks).toHaveLength(6);
     expect(report.checks.map((c) => c.name)).toEqual([
       'entry',
       'cookies',
+      'bootstrap',
       'auth',
       'search',
       'guidance',
     ]);
     expect(report.checks.every((c) => c.ok)).toBe(true);
+    expect(byName(report, 'bootstrap')?.detail).toContain('runtime present');
     expect(byName(report, 'auth')?.detail).toContain('me');
   });
 
@@ -171,6 +178,7 @@ describe('runDoctor', () => {
     expect(env.ok).toBe(true);
     if (!env.ok) throw new Error('expected Ok envelope');
     expect(calls).toHaveLength(0); // spy: no live network calls
+    expect(byName(env.data, 'bootstrap')?.detail).toContain('skipped');
     expect(byName(env.data, 'auth')?.detail).toContain('skipped');
     expect(byName(env.data, 'search')?.detail).toContain('skipped');
     expect(env.data.healthy).toBe(true);
