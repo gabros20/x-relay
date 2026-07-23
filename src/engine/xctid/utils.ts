@@ -24,30 +24,51 @@ const BROWSER_HEADERS: Record<string, string> = {
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
 };
 
-/** Fetches x.com, following the migration redirect + form, and returns the homepage Document. */
-export async function handleXMigration(fetchImpl: typeof fetch = fetch): Promise<XDocument> {
-  const response = await fetchImpl('https://x.com', { headers: BROWSER_HEADERS });
+/** Marker for the responsive-web `ondemand.s` webpack chunk the txid generator needs. */
+export const ON_DEMAND_MARKER = 'ondemand.s';
+
+/**
+ * X paths whose logged-out HTML still ships the legacy `responsive-web` runtime
+ * (the site-verification key + `loading-x-anim` frames + the `ondemand.s` webpack
+ * manifest) that the x-client-transaction-id generator initializes from. Tried in
+ * order; the first one that carries the runtime wins.
+ *
+ * Why not the root `/`: X migrated `https://x.com` (and profile pages) to a new
+ * "x-web" frontend whose logged-out shell no longer inlines that runtime, so a
+ * root fetch now yields a Document the generator can't bootstrap from. These paths
+ * remain on the legacy shell. `/i/flow/login` is an intentionally logged-out page,
+ * so an anonymous fetch of it is both semantically correct and stable.
+ */
+const BOOTSTRAP_PATHS = ['/i/flow/login', '/home', '/explore'] as const;
+
+const MIGRATION_REDIRECTION_REGEX =
+  /(http(?:s)?:\/\/(?:www\.)?(twitter|x){1}\.com(\/x)?\/migrate([/?])?tok=[a-zA-Z0-9%\-_]+)+/i;
+
+/** Fetches one X URL, following the migration redirect + form; returns the final Document + its HTML. */
+async function fetchShellDocument(
+  url: string,
+  fetchImpl: typeof fetch,
+): Promise<{ document: XDocument; html: string }> {
+  const response = await fetchImpl(url, { headers: BROWSER_HEADERS });
   if (!response.ok) {
     throw new XHomePageFetchError(response.status, response.statusText);
   }
 
-  const htmlText = await response.text();
+  let htmlText = await response.text();
   let document = parseHTML(htmlText).window.document as unknown as XDocument;
-
-  const migrationRedirectionRegex =
-    /(http(?:s)?:\/\/(?:www\.)?(twitter|x){1}\.com(\/x)?\/migrate([/?])?tok=[a-zA-Z0-9%\-_]+)+/i;
 
   const metaRefresh = document.querySelector("meta[http-equiv='refresh']");
   const metaContent = metaRefresh ? metaRefresh.getAttribute('content') || '' : '';
   const migrationRedirectionUrl =
-    migrationRedirectionRegex.exec(metaContent) || migrationRedirectionRegex.exec(htmlText);
+    MIGRATION_REDIRECTION_REGEX.exec(metaContent) || MIGRATION_REDIRECTION_REGEX.exec(htmlText);
 
   if (migrationRedirectionUrl) {
     const redirectResponse = await fetchImpl(migrationRedirectionUrl[0]);
     if (!redirectResponse.ok) {
       throw new XMigrationRedirectionError(redirectResponse.status, redirectResponse.statusText);
     }
-    document = parseHTML(await redirectResponse.text()).window.document as unknown as XDocument;
+    htmlText = await redirectResponse.text();
+    document = parseHTML(htmlText).window.document as unknown as XDocument;
   }
 
   const migrationForm =
@@ -55,7 +76,7 @@ export async function handleXMigration(fetchImpl: typeof fetch = fetch): Promise
     document.querySelector("form[action='https://x.com/x/migrate']");
 
   if (migrationForm) {
-    const url = migrationForm.getAttribute('action') || 'https://x.com/x/migrate';
+    const formUrl = migrationForm.getAttribute('action') || 'https://x.com/x/migrate';
     const method = migrationForm.getAttribute('method') || 'POST';
     const requestPayload = new FormData();
     for (const element of Array.from(migrationForm.querySelectorAll('input'))) {
@@ -63,14 +84,43 @@ export async function handleXMigration(fetchImpl: typeof fetch = fetch): Promise
       const value = element.getAttribute('value');
       if (name && value) requestPayload.append(name, value);
     }
-    const formResponse = await fetchImpl(url, { method, body: requestPayload });
+    const formResponse = await fetchImpl(formUrl, { method, body: requestPayload });
     if (!formResponse.ok) {
       throw new XMigrationFormError(formResponse.status, formResponse.statusText);
     }
-    document = parseHTML(await formResponse.text()).window.document as unknown as XDocument;
+    htmlText = await formResponse.text();
+    document = parseHTML(htmlText).window.document as unknown as XDocument;
   }
 
-  return document;
+  return { document, html: htmlText };
+}
+
+/**
+ * Fetches an X shell that still carries the responsive-web runtime and returns its
+ * Document. Follows the migration redirect + form on each candidate path.
+ *
+ * Tries BOOTSTRAP_PATHS in order and returns the first Document whose HTML still
+ * contains the `ondemand.s` runtime. If none do (a future X migration of these
+ * paths too), the last successfully fetched Document is returned so the downstream
+ * generator throws the precise OnDemandFileUrlResolutionError rather than a vague
+ * transport error. Only if every candidate fetch itself failed do we rethrow.
+ */
+export async function handleXMigration(fetchImpl: typeof fetch = fetch): Promise<XDocument> {
+  let lastDocument: XDocument | undefined;
+  let lastError: unknown;
+
+  for (const path of BOOTSTRAP_PATHS) {
+    try {
+      const { document, html } = await fetchShellDocument(`https://x.com${path}`, fetchImpl);
+      lastDocument = document;
+      if (html.includes(ON_DEMAND_MARKER)) return document;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  if (lastDocument) return lastDocument;
+  throw lastError ?? new XHomePageFetchError(0, 'no X bootstrap path returned a usable shell');
 }
 
 /** Floating-point → hex string (integer part + optional hex fraction). */
