@@ -1,3 +1,10 @@
+## [1.5.1](https://github.com/gabros20/x-relay/compare/v1.5.0...v1.5.1) (2026-07-23)
+
+
+### Bug Fixes
+
+* **xctid:** bootstrap txid from legacy shell paths, not the migrated root ([1b6c798](https://github.com/gabros20/x-relay/commit/1b6c798085afd8d0cc5f6f98daf2372740d74149))
+
 # [1.5.0](https://github.com/gabros20/x-relay/compare/v1.4.0...v1.5.0) (2026-07-03)
 
 
