@@ -404,6 +404,30 @@ describe('parseThread', () => {
     expect(thread.nextCursor).toBe('MORE');
   });
 
+  test('X-recommended related tweets are not passed off as replies', () => {
+    // `tweetdetailrelatedtweets-*` shares the 'tweet' prefix, so an allowlist match
+    // on 'tweet' silently admits X's recommendations into replies[]. They are not
+    // replies to anything — twikit routes them out of the conversation entirely.
+    const json = tweetDetail([
+      tweetEntry('tweet-500', '500'),
+      conversationThreadEntry('501', ['501']),
+      {
+        entryId: 'tweetdetailrelatedtweets-0',
+        content: {
+          entryType: 'TimelineTimelineModule',
+          items: [
+            {
+              entryId: 'tweetdetailrelatedtweets-0-tweet-900',
+              item: { itemContent: { tweet_results: { result: tweetWithId('900') } } },
+            },
+          ],
+        },
+      },
+    ]);
+    const thread = parseThread(json, '500');
+    expect(thread.replies.map((t) => t.id)).toEqual(['501']);
+  });
+
   test('a conversationthread entry repeating the focal tweet does not duplicate the root', () => {
     const json = tweetDetail([
       tweetEntry('tweet-500', '500'),

@@ -404,7 +404,16 @@ const TWEET_ENTRY_PREFIXES = [
   'conversationthread',
 ];
 // Entry-id prefixes we always drop (cursors, ads, recommendations, modules-as-noise).
-const DROP_ENTRY_PREFIXES = ['cursor-', 'promoted', 'who-to-follow', 'module-'];
+// Checked BEFORE the accept list, which matters for `tweetdetailrelatedtweets-`: it
+// shares the 'tweet' prefix, so without this it would ride the accept list into
+// replies[] and pass X's recommendations off as answers to the conversation.
+const DROP_ENTRY_PREFIXES = [
+  'cursor-',
+  'promoted',
+  'who-to-follow',
+  'module-',
+  'tweetdetailrelatedtweets',
+];
 
 function startsWithAny(value: string, prefixes: string[]): boolean {
   return prefixes.some((prefix) => value.startsWith(prefix));
