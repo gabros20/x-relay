@@ -249,6 +249,129 @@ describe('runBatch file handling', () => {
   });
 });
 
+// ── runBatch: incremental persistence (issue #5) ─────────────────────────────
+describe('runBatch incremental persistence', () => {
+  /** Reads the archive at `path`, or null when it does not exist yet. */
+  function onDisk(path: string): ArchiveFile | null {
+    try {
+      return JSON.parse(readFileSync(path, 'utf-8')) as ArchiveFile;
+    } catch {
+      return null;
+    }
+  }
+
+  test('flushes to --out after every query, not once at the end', async () => {
+    const out = join(tmp(), 'corpus.json');
+    // sleep runs BETWEEN queries, so it samples the file after q1 and after q2.
+    const samples: (string[] | null)[] = [];
+    const env = await runBatch(
+      searchEngine({ a: [tw('1')], b: [tw('2')], c: [tw('3')] }, []),
+      { file: queryFile(['a', 'b', 'c']), out, delay: 0 },
+      {
+        sleep: async () => {
+          samples.push(onDisk(out)?.tweets.map((t) => t.id) ?? null);
+        },
+        progress: () => {},
+      },
+    );
+    if (!env.ok) throw new Error('expected ok');
+    expect(samples).toEqual([['1'], ['2', '1']]);
+    expect(onDisk(out)?.tweets.map((t) => t.id)).toEqual(['3', '2', '1']);
+  });
+
+  test('an interrupted run keeps the completed queries on disk', async () => {
+    const out = join(tmp(), 'corpus.json');
+    let killed = false;
+    await expect(
+      runBatch(
+        searchEngine({ a: [tw('1')], b: [tw('2')] }, []),
+        { file: queryFile(['a', 'b']), out, delay: 0 },
+        {
+          sleep: async () => {
+            killed = true;
+            throw new Error('process killed mid-sweep');
+          },
+          progress: () => {},
+        },
+      ),
+    ).rejects.toThrow('process killed mid-sweep');
+    expect(killed).toBe(true);
+    expect(onDisk(out)?.tweets.map((t) => t.id)).toEqual(['1']);
+  });
+
+  test('a flushed run merges into a pre-existing archive from the first query on', async () => {
+    const out = join(tmp(), 'corpus.json');
+    writeFileSync(
+      out,
+      JSON.stringify({
+        schema: 'x-relay/archive@1',
+        source: 'bookmarks',
+        generatedAt: '2026-01-01T00:00:00.000Z',
+        count: 1,
+        tweets: [atw('99')],
+      } satisfies ArchiveFile),
+      'utf-8',
+    );
+    const samples: (string[] | null)[] = [];
+    await runBatch(
+      searchEngine({ a: [tw('1')], b: [tw('2')] }, []),
+      { file: queryFile(['a', 'b']), out, delay: 0 },
+      {
+        sleep: async () => {
+          samples.push(
+            onDisk(out)
+              ?.tweets.map((t) => t.id)
+              .sort() ?? null,
+          );
+        },
+        progress: () => {},
+      },
+    );
+    expect(samples).toEqual([['1', '99']]);
+    expect(
+      onDisk(out)
+        ?.tweets.map((t) => t.id)
+        .sort(),
+    ).toEqual(['1', '2', '99']);
+  });
+
+  test('--stdout writes nothing to disk and still returns the archive in the envelope', async () => {
+    const out = join(tmp(), 'never-written.json');
+    const env = await runBatch(
+      searchEngine({ a: [tw('1')], b: [tw('2')] }, []),
+      { file: queryFile(['a', 'b']), stdout: true, delay: 0 },
+      { sleep: sleepSpy().fn, progress: () => {} },
+    );
+    if (!env.ok) throw new Error('expected ok');
+    expect(env.data.archive?.tweets.map((t) => t.id).sort()).toEqual(['1', '2']);
+    expect(env.data.out).toBeUndefined();
+    expect(onDisk(out)).toBeNull();
+  });
+
+  test('a failed query still flushes the tweets collected so far', async () => {
+    const out = join(tmp(), 'corpus.json');
+    const samples: (string[] | null)[] = [];
+    const env = await runBatch(
+      searchEngine(
+        { a: [tw('1')], b: new EngineError('RATE_LIMITED', 'slow down'), c: [tw('3')] },
+        [],
+      ),
+      { file: queryFile(['a', 'b', 'c']), out, delay: 0 },
+      {
+        sleep: async () => {
+          samples.push(onDisk(out)?.tweets.map((t) => t.id) ?? null);
+        },
+        progress: () => {},
+      },
+    );
+    if (!env.ok) throw new Error('expected ok');
+    expect(env.data.failed).toBe(1);
+    // The failed query adds nothing but must not wipe or skip the flush.
+    expect(samples).toEqual([['1'], ['1']]);
+    expect(onDisk(out)?.tweets.map((t) => t.id)).toEqual(['3', '1']);
+  });
+});
+
 // ── runDedupe ────────────────────────────────────────────────────────────────
 describe('runDedupe', () => {
   function searchEnvelopeFile(tweets: Tweet[]): string {

@@ -45,6 +45,43 @@ export interface BatchDeps {
   progress?: ProgressReporter;
 }
 
+/**
+ * The run's archive as it accumulates. Each query's fresh tweets are merged in and —
+ * when `--out` is set — written to disk immediately, rather than once at the end.
+ *
+ * Why: a 30-query sweep runs for ~15 minutes against a rate-limited API, so it is most
+ * likely to die when the most work is at stake. Flushing per query means an interrupted
+ * run is resumable by simply re-running the same command (which `--out` already merges),
+ * and the growing file is a progress signal a supervising agent can poll even under
+ * `--quiet`. Without `--out` (i.e. `--stdout`) it accumulates in memory only.
+ */
+interface ArchiveSink {
+  /** Merge one query's tweets into the archive and persist (no-op without `--out`). */
+  add(fresh: ArchiveTweet[]): void;
+  /** The merged archive as it currently stands. */
+  file(): ArchiveFile;
+}
+
+function createArchiveSink(queries: string[], out: string | undefined): ArchiveSink {
+  /** Stamp the batch provenance so even a crashed run's file says what produced it. */
+  const stamp = (file: ArchiveFile): ArchiveFile => {
+    file.source = 'search';
+    file.queries = queries;
+    return file;
+  };
+
+  const existing = out ? loadArchive(out) : null;
+  let current = stamp(mergeArchive(existing, [], { generatedAt: new Date().toISOString() }).file);
+
+  return {
+    add(fresh) {
+      current = stamp(mergeArchive(current, fresh, { generatedAt: new Date().toISOString() }).file);
+      if (out) saveArchive(out, current);
+    },
+    file: () => current,
+  };
+}
+
 /** The per-query outcome recorded in the batch summary. */
 export interface BatchQueryResult {
   query: string;
@@ -95,25 +132,36 @@ function searchOpts(opts: BatchOpts): { product?: SearchProduct; limit?: number 
 }
 
 /**
- * Run one query: record its tweets (deduped into `seen`) + a perQuery entry, and
- * return how long to wait before the NEXT query — the normal delay, or a
+ * Run one query: flush its not-yet-seen tweets into the sink, record a perQuery
+ * entry, and return how long to wait before the NEXT query — the normal delay, or a
  * rate-limit's retryAfterMs when the query was throttled.
+ *
+ * The sink is written even when the query fails or adds nothing, so a partial run's
+ * file is always current up to the last completed query.
  */
 async function runOneQuery(
   engine: Engine,
   query: string,
   opts: BatchOpts,
-  seen: Map<string, Tweet>,
+  seen: Set<string>,
+  sink: ArchiveSink,
   perQuery: BatchQueryResult[],
   delay: number,
 ): Promise<number> {
   try {
     const res = await engine.search(query, searchOpts(opts));
-    for (const t of res.tweets) if (!seen.has(t.id)) seen.set(t.id, t);
+    const fresh: ArchiveTweet[] = [];
+    for (const t of res.tweets) {
+      if (seen.has(t.id)) continue;
+      seen.add(t.id);
+      fresh.push(toArchiveTweet(t));
+    }
+    sink.add(fresh);
     perQuery.push({ query, count: res.tweets.length });
     return delay;
   } catch (e) {
     const rec = batchErrorRecord(e);
+    sink.add([]);
     perQuery.push({ query, error: rec });
     return rec.code === 'RATE_LIMITED' ? (rec.retryAfterMs ?? delay) : delay;
   }
@@ -124,34 +172,30 @@ async function executeQueries(
   engine: Engine,
   queries: string[],
   opts: BatchOpts,
+  sink: ArchiveSink,
   sleep: (ms: number) => Promise<void>,
   progress: ProgressReporter,
-): Promise<{ seen: Map<string, Tweet>; perQuery: BatchQueryResult[] }> {
-  const seen = new Map<string, Tweet>();
+): Promise<{ seen: Set<string>; perQuery: BatchQueryResult[] }> {
+  const seen = new Set<string>();
   const perQuery: BatchQueryResult[] = [];
   const delay = opts.delay ?? DEFAULT_DELAY_MS;
   for (let i = 0; i < queries.length; i++) {
     const query = queries[i] as string;
     progress(`searching ${i + 1}/${queries.length}: ${query}`);
-    const waitMs = await runOneQuery(engine, query, opts, seen, perQuery, delay);
+    const waitMs = await runOneQuery(engine, query, opts, seen, sink, perQuery, delay);
     if (i < queries.length - 1) await sleep(waitMs);
   }
   return { seen, perQuery };
 }
 
-/** Build the summary + either persist the merged archive or embed it in the result. */
+/** Build the summary. The archive is already persisted (or accumulated) by the sink. */
 function buildBatchResult(
   queries: string[],
-  seen: Map<string, Tweet>,
+  seen: Set<string>,
   perQuery: BatchQueryResult[],
+  sink: ArchiveSink,
   opts: BatchOpts,
 ): BatchResult {
-  const fresh = [...seen.values()].map(toArchiveTweet);
-  const existing = opts.out ? loadArchive(opts.out) : null;
-  const { file } = mergeArchive(existing, fresh, { generatedAt: new Date().toISOString() });
-  file.source = 'search';
-  file.queries = queries;
-
   const succeeded = perQuery.filter((q) => q.error === undefined).length;
   const result: BatchResult = {
     queries: queries.length,
@@ -161,10 +205,9 @@ function buildBatchResult(
     perQuery,
   };
   if (opts.out) {
-    saveArchive(opts.out, file);
     result.out = opts.out;
   } else {
-    result.archive = file;
+    result.archive = sink.file();
   }
   return result;
 }
@@ -207,8 +250,9 @@ export async function runBatch(
 
   const sleep = deps.sleep ?? defaultSleep;
   const progress = deps.progress ?? progressReporter(opts.quiet ?? false);
-  const { seen, perQuery } = await executeQueries(engine, queries, opts, sleep, progress);
-  return ok('batch', buildBatchResult(queries, seen, perQuery, opts));
+  const sink = createArchiveSink(queries, opts.out);
+  const { seen, perQuery } = await executeQueries(engine, queries, opts, sink, sleep, progress);
+  return ok('batch', buildBatchResult(queries, seen, perQuery, sink, opts));
 }
 
 // ── dedupe (offline) ────────────────────────────────────────────────────────
