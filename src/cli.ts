@@ -458,7 +458,7 @@ export async function dispatch(parsed: ParsedArgs, engine: Engine): Promise<Enve
         ...(num(parsed, 'limit') !== undefined ? { limit: num(parsed, 'limit') } : {}),
       });
     case 'thread':
-      return runThread(engine, target);
+      return runThread(engine, target, num(parsed, 'limit'));
     case 'bookmarks': {
       // `bookmarks folders [<id>]` → bookmark folder list or folder timeline
       if (target === 'folders') {

@@ -259,10 +259,14 @@ export function runUserPosts(
   );
 }
 
-export function runThread(engine: Engine, input: string): Promise<Envelope<ThreadResult>> {
+export function runThread(
+  engine: Engine,
+  input: string,
+  limit?: number,
+): Promise<Envelope<ThreadResult>> {
   const resolved = resolveTweetIdOrErr('thread', input);
   if (typeof resolved !== 'string') return Promise.resolve(resolved);
-  return guard('thread', () => engine.thread(resolved));
+  return guard('thread', () => engine.thread(resolved, lim(limit)));
 }
 
 // ── more read endpoints (timelines / users / trends / article / media) ───────

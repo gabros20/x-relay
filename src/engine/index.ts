@@ -50,7 +50,7 @@ import {
   parseCommunity,
   parseUserTimeline,
 } from './parse-extra.ts';
-import { findDict, parseThread, parseTimeline, parseUserResult } from './parse.ts';
+import { findDict, parseThread, parseTimeline, parseUserResult, placeholderRoot } from './parse.ts';
 import {
   type SessionSpec,
   assignProxies,
@@ -125,6 +125,11 @@ export interface PageOpts {
   stopAtId?: string;
 }
 
+export interface ThreadOpts {
+  /** Max replies to collect across all pages (default: DEFAULT_LIMIT). */
+  limit?: number;
+}
+
 /** Shared options for any rich-archive timeline sweep (bookmarks/user/list/search/likes/feed). */
 export interface ArchiveOpts {
   /** Maximum number of tweets to collect (default: DEFAULT_LIMIT). */
@@ -192,7 +197,14 @@ export interface Engine {
   userTweets(handle: string, opts?: UserTweetsOpts): Promise<TweetPage>;
   userMedia(handle: string, opts?: PageOpts): Promise<TweetPage>;
   bookmarks(opts?: PageOpts): Promise<TweetPage>;
-  thread(id: string): Promise<ThreadResult>;
+  /**
+   * A tweet plus its reply conversation, following the cursor across pages until
+   * `limit` replies (default DEFAULT_LIMIT) or the conversation is exhausted.
+   * The result reports `returnedCount` / `claimedCount` / `truncated`, and carries a
+   * `warning` when the root claims replies but none came back — so a partial fetch
+   * can never read as "this tweet has no replies".
+   */
+  thread(id: string, opts?: ThreadOpts): Promise<ThreadResult>;
   list(listId: string, opts?: PageOpts): Promise<TweetPage>;
   followers(handle: string, opts?: PageOpts): Promise<UserPage>;
   following(handle: string, opts?: PageOpts): Promise<UserPage>;
@@ -581,6 +593,94 @@ async function paginate(
   // but there's nothing newer to fetch, so we intentionally omit nextCursor.
   if (cursor !== undefined && !reachedWatermark && !reachedMembershipStop) out.nextCursor = cursor;
   return out;
+}
+
+/**
+ * Follows a conversation's cursor, merging pages into one ThreadResult: the root
+ * comes from page 1, replies accumulate (de-duped by id, focal tweet excluded by
+ * parseThread), and the sweep stops at `limit`, exhaustion, a repeated cursor, or
+ * EMPTY_PAGE_TOLERANCE pages with nothing fresh.
+ *
+ * Unlike `paginate`, this never over-collects and then slices. When the limit lands
+ * mid-page it returns the cursor that produced THAT page, so resuming re-reads a few
+ * already-seen replies instead of silently skipping the unread remainder — the whole
+ * point of a command whose failure mode was losing replies without saying so.
+ */
+async function paginateThread(
+  fetchPage: (cursor?: string) => Promise<ThreadResult>,
+  focalTweetId: string,
+  limit: number,
+): Promise<ThreadResult> {
+  const replies: Tweet[] = [];
+  const seen = new Set<string>([focalTweetId]);
+  let root: Tweet | undefined;
+  /** The cursor that produced the page being read (undefined on page 1). */
+  let pageCursor: string | undefined;
+  let nextCursor: string | undefined;
+  let emptyStreak = 0;
+  let truncated = false;
+
+  for (;;) {
+    const page = await fetchPage(pageCursor);
+    if (root === undefined) root = page.root;
+
+    let fresh = 0;
+    for (const reply of page.replies) {
+      if (seen.has(reply.id)) continue;
+      if (replies.length >= limit) {
+        truncated = true;
+        nextCursor = pageCursor;
+        break;
+      }
+      seen.add(reply.id);
+      replies.push(reply);
+      fresh += 1;
+    }
+    if (truncated) break;
+
+    if (page.nextCursor === undefined || page.nextCursor === pageCursor) break;
+
+    if (fresh === 0) {
+      emptyStreak += 1;
+      if (emptyStreak >= EMPTY_PAGE_TOLERANCE) break;
+    } else {
+      emptyStreak = 0;
+    }
+
+    if (replies.length >= limit) {
+      // Filled the limit exactly on a page boundary — more sits behind the next cursor.
+      truncated = true;
+      nextCursor = page.nextCursor;
+      break;
+    }
+    pageCursor = page.nextCursor;
+  }
+
+  return buildThreadResult(root ?? placeholderRoot(focalTweetId), replies, nextCursor, truncated);
+}
+
+/** Assemble the merged thread plus its claimed-vs-returned reporting. */
+function buildThreadResult(
+  root: Tweet,
+  replies: Tweet[],
+  nextCursor: string | undefined,
+  truncated: boolean,
+): ThreadResult {
+  const claimedCount = root.metrics.replies;
+  const result: ThreadResult = {
+    root,
+    replies,
+    returnedCount: replies.length,
+    truncated,
+  };
+  if (claimedCount !== undefined) result.claimedCount = claimedCount;
+  if (nextCursor !== undefined) result.nextCursor = nextCursor;
+  // The issue-#4 state: X reports replies but hands back none. Say so loudly rather
+  // than let a partial fetch read as "this tweet has no replies".
+  if (claimedCount !== undefined && claimedCount > 0 && replies.length === 0) {
+    result.warning = `X returned no replies although the root reports ${claimedCount} — the conversation is gated or the fetch came back empty. Retry, or use \`quoters\` to find responses.`;
+  }
+  return result;
 }
 
 /** Follows bottom cursors for a user-list timeline, de-duping by id, up to `limit`. */
@@ -1128,9 +1228,19 @@ export function createEngine(deps: EngineDeps): Engine {
       );
     },
 
-    async thread(id) {
-      const value = await call('TweetDetail', tweetDetailRequest({ focalTweetId: id }));
-      return parseThread(value, id);
+    async thread(id, opts) {
+      const limit = opts?.limit ?? DEFAULT_LIMIT;
+      return paginateThread(
+        async (cursor) => {
+          const value = await call(
+            'TweetDetail',
+            tweetDetailRequest({ focalTweetId: id, ...(cursor !== undefined ? { cursor } : {}) }),
+          );
+          return parseThread(value, id);
+        },
+        id,
+        limit,
+      );
     },
 
     async userMedia(handle, opts) {

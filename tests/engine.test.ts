@@ -51,6 +51,58 @@ function timeline(ids: string[], cursor?: string): unknown {
   };
 }
 
+/**
+ * A synthetic TweetDetail conversation page: one entry per id plus an optional
+ * bottom cursor. `replyCounts` claims `legacy.reply_count` on specific ids so a
+ * fixture can assert the claimed-vs-returned gap.
+ */
+function conversation(
+  ids: string[],
+  cursor?: string,
+  replyCounts: Record<string, number> = {},
+): unknown {
+  const entries: unknown[] = ids.map((id) => ({
+    entryId: `tweet-${id}`,
+    content: {
+      itemContent: {
+        tweet_results: {
+          result: {
+            __typename: 'Tweet',
+            rest_id: id,
+            core: {
+              user_results: {
+                result: {
+                  __typename: 'User',
+                  rest_id: `u${id}`,
+                  core: { screen_name: 'alice', name: 'Alice' },
+                  legacy: {},
+                },
+              },
+            },
+            legacy: {
+              full_text: `tweet ${id}`,
+              ...(replyCounts[id] !== undefined ? { reply_count: replyCounts[id] } : {}),
+            },
+          },
+        },
+      },
+    },
+  }));
+  if (cursor !== undefined) {
+    entries.push({
+      entryId: `cursor-bottom-${cursor}`,
+      content: { cursorType: 'Bottom', value: cursor },
+    });
+  }
+  return {
+    data: {
+      threaded_conversation_with_injections_v2: {
+        instructions: [{ type: 'TimelineAddEntries', entries }],
+      },
+    },
+  };
+}
+
 /** A fake client that serves canned values, keyed by the cursor variable. */
 function fakeClient(byCursor: Record<string, unknown>, log?: { ops: string[] }): EngineClient {
   return {
@@ -175,6 +227,83 @@ describe('thread', () => {
     const res = await engine.thread('100');
     expect(res.root.id).toBe('100');
     expect(res.replies.map((t) => t.id)).toEqual(['101']);
+  });
+
+  test('follows nextCursor across pages until the conversation is exhausted', async () => {
+    const client = fakeClient({
+      _start: conversation(['100', '101'], 'c1'),
+      c1: conversation(['102', '103'], 'c2'),
+      c2: conversation(['104']),
+    });
+    const engine = createEngine({ cookies, client });
+    const res = await engine.thread('100');
+    expect(res.root.id).toBe('100');
+    expect(res.replies.map((t) => t.id)).toEqual(['101', '102', '103', '104']);
+    expect(res.nextCursor).toBeUndefined();
+  });
+
+  test('stops at the limit and reports truncated with the cursor to resume from', async () => {
+    const client = fakeClient({
+      _start: conversation(['100', '101'], 'c1'),
+      c1: conversation(['102', '103'], 'c2'),
+      c2: conversation(['104']),
+    });
+    const engine = createEngine({ cookies, client });
+    const res = await engine.thread('100', { limit: 2 });
+    expect(res.replies.map((t) => t.id)).toEqual(['101', '102']);
+    expect(res.truncated).toBe(true);
+    expect(res.nextCursor).toBe('c1');
+  });
+
+  test('reports returnedCount and the root claimedCount on a healthy thread', async () => {
+    const client = fakeClient({
+      _start: conversation(['100', '101'], 'c1', { '100': 2 }),
+      c1: conversation(['102']),
+    });
+    const engine = createEngine({ cookies, client });
+    const res = await engine.thread('100');
+    expect(res.returnedCount).toBe(2);
+    expect(res.claimedCount).toBe(2);
+    expect(res.truncated).toBe(false);
+    expect(res.warning).toBeUndefined();
+  });
+
+  test('warns when the root claims replies but none came back (issue #4)', async () => {
+    const client = fakeClient({
+      _start: conversation(['100'], 'c1', { '100': 248 }),
+      c1: conversation([]),
+    });
+    const engine = createEngine({ cookies, client });
+    const res = await engine.thread('100');
+    expect(res.replies).toEqual([]);
+    expect(res.returnedCount).toBe(0);
+    expect(res.claimedCount).toBe(248);
+    expect(res.warning).toContain('248');
+  });
+
+  test('de-dupes replies repeated across pages and never lists the focal tweet as a reply', async () => {
+    const client = fakeClient({
+      _start: conversation(['100', '101'], 'c1'),
+      c1: conversation(['100', '101', '102']),
+    });
+    const engine = createEngine({ cookies, client });
+    const res = await engine.thread('100');
+    expect(res.replies.map((t) => t.id)).toEqual(['101', '102']);
+  });
+
+  test('stops instead of looping when a page repeats the cursor it was fetched with', async () => {
+    const ops: string[] = [];
+    const client = fakeClient(
+      {
+        _start: conversation(['100', '101'], 'c1'),
+        c1: conversation(['102'], 'c1'),
+      },
+      { ops },
+    );
+    const engine = createEngine({ cookies, client });
+    const res = await engine.thread('100');
+    expect(res.replies.map((t) => t.id)).toEqual(['101', '102']);
+    expect(ops.length).toBe(2);
   });
 });
 

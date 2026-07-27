@@ -44,12 +44,12 @@ describe('requireConfirmation (destructive-write guard)', () => {
 
 // ── runThread (tweet-id resolution / validation) ─────────────────────────────
 
-/** Engine stub whose thread() records the id it was called with. */
+/** Engine stub whose thread() records the id (and any limit) it was called with. */
 function fakeThreadEngine(calls: string[]): Engine {
   return {
-    thread: async (id: string) => {
-      calls.push(id);
-      return { root: {}, replies: [] };
+    thread: async (id: string, opts?: { limit?: number }) => {
+      calls.push(opts?.limit === undefined ? id : `${id}:${opts.limit}`);
+      return { root: {}, replies: [], returnedCount: 0, truncated: false };
     },
   } as unknown as Engine;
 }
@@ -85,6 +85,13 @@ describe('runThread tweet-id validation', () => {
     const env = await runThread(fakeThreadEngine(calls), 'https://x.com/x/status/123456789');
     expect(env.ok).toBe(true);
     expect(calls).toEqual(['123456789']);
+  });
+
+  test('limit is forwarded to engine.thread', async () => {
+    const calls: string[] = [];
+    const env = await runThread(fakeThreadEngine(calls), '1234567890', 250);
+    expect(env.ok).toBe(true);
+    expect(calls).toEqual(['1234567890:250']);
   });
 });
 

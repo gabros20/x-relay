@@ -34,9 +34,9 @@ function fakeEngine(calls: string[]): Engine {
       calls.push(`bookmarks:${opts?.limit ?? '-'}`);
       return { tweets: [] };
     },
-    async thread(id): Promise<ThreadResult> {
-      calls.push(`thread:${id}`);
-      return { root: {} as never, replies: [] };
+    async thread(id, opts): Promise<ThreadResult> {
+      calls.push(`thread:${id}:${opts?.limit ?? '-'}`);
+      return { root: {} as never, replies: [], returnedCount: 0, truncated: false };
     },
     async userMedia(handle): Promise<TweetPage> {
       calls.push(`userMedia:${handle}`);
@@ -196,7 +196,13 @@ describe('dispatch', () => {
   test('thread extracts a tweet id from a status URL', async () => {
     const calls: string[] = [];
     await dispatch(parseArgs(['thread', 'https://x.com/x/status/123456789']), fakeEngine(calls));
-    expect(calls[0]).toBe('thread:123456789');
+    expect(calls[0]).toBe('thread:123456789:-');
+  });
+
+  test('thread forwards --limit to the engine', async () => {
+    const calls: string[] = [];
+    await dispatch(parseArgs(['thread', '123456789', '--limit', '200']), fakeEngine(calls));
+    expect(calls[0]).toBe('thread:123456789:200');
   });
 
   test('thread with a malformed X URL is rejected without calling the engine', async () => {

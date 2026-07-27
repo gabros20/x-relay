@@ -115,9 +115,15 @@ xrelay user-posts <handle|url> [--replies] [--limit N]
 
 ### `thread` — COST: expensive. The full read.
 ```
-xrelay thread <id|url>
+xrelay thread <id|url> [--limit N]
 ```
-- Returns `{ root: <tweet>, replies: [<tweet>...], nextCursor }`. Use on finalists only.
+- Returns `{ root, replies[], returnedCount, claimedCount?, truncated, nextCursor?, warning? }`. Use on
+  finalists only. Follows X's conversation cursor across pages until `--limit` replies (default 40).
+- **Always read the counts before concluding anything.** `claimedCount` is what the root itself says it has;
+  `returnedCount` is what you got. `truncated: true` means the conversation has more — raise `--limit`.
+- A `warning` field means X handed back **zero** replies while the root claims some. That is a failed fetch,
+  **not** "this tweet has no replies" — retry, or use `quoters`, which reaches rebuttals and disagreement that
+  a gated conversation won't give you.
 
 ### `bookmarks` / `my-posts` — COST: cheap. Your local cache (offline, instant).
 ```
@@ -232,7 +238,11 @@ xrelay batch --file queries.txt (--out merged.json | --stdout)
   ms between queries (default 2000), continue-on-error (a failed query is recorded with `{code, message,
   retryAfterMs?}` and the run proceeds; a `RATE_LIMITED` query waits its `retryAfterMs` before the next),
   deduped by tweet id across all queries. Progress prints to stderr (`searching k/n: <query>`); `--quiet`
-  silences it. `--out` **MERGES** into an existing archive at that path (incremental — safe to re-run).
+  silences it.
+- `--out` is **rewritten after every query**, and **MERGES** into whatever archive already sits at that path.
+  Two consequences worth relying on: a run killed at query 30/32 keeps everything up to query 29 — just
+  **re-run the same command to resume** — and **watching the file grow is a valid progress signal**, including
+  under `--quiet` where there is no stderr chatter.
 - Returns `{ queries, succeeded, failed, totalUnique, out?, perQuery }`.
 
 ### `dedupe` — COST: free, offline. Merge search/archive files.
@@ -367,6 +377,10 @@ Keychain "Always Allow" prompt. Assumes a residential IP (run locally); datacent
   resolves to a real entry file if you ever suspect a broken symlink.
 - Empty results from `thread` / `retweeters` / `likers` / `quoters` / `article` / `media` are no longer silent:
   an unparseable id/URL fails loudly with `INVALID_INPUT` + a hint, so a bad ref won't masquerade as "no data".
+- **An empty `thread` is never silent either.** `thread` follows the conversation cursor across pages, and
+  reports `returnedCount` / `claimedCount` / `truncated`. If X returns no replies while the root claims some,
+  the result carries a `warning` — read it as a failed fetch, not as a reply-less tweet, and fall back to
+  `quoters`. `truncated: true` just means you hit `--limit`; raise it.
 
 ### Account pool + proxy (optional — for heavy/sustained use)
 
