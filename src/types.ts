@@ -106,7 +106,19 @@ export type SearchResult = TweetPage & {
 export type ThreadResult = {
   root: Tweet;
   replies: Tweet[];
+  /** Cursor to resume from. Present only when `truncated` — the conversation has more. */
   nextCursor?: string;
+  /** `replies.length`, stated explicitly so a caller need not count to spot a gap. */
+  returnedCount: number;
+  /** Replies the root itself claims (`root.metrics.replies`); undefined when X omits it. */
+  claimedCount?: number;
+  /** True when the sweep stopped at the limit rather than exhausting the conversation. */
+  truncated: boolean;
+  /**
+   * Set only for the known-bad state where the root claims replies but none came
+   * back — so a partial fetch can never masquerade as "this tweet has no replies".
+   */
+  warning?: string;
 };
 
 export type SearchProduct = 'Top' | 'Latest' | 'Media' | 'People';

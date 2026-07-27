@@ -186,10 +186,26 @@ function buildServer(): McpServer {
   server.registerTool(
     'thread',
     {
-      description: 'A tweet plus its reply thread — the full read. Use only on finalists.',
-      inputSchema: { target: z.string().describe('tweet id or status URL') },
+      description:
+        'A tweet plus its reply conversation — the full read. Use only on finalists. Follows X\'s conversation cursor across pages up to `limit` replies (default 40). Always check the returned `returnedCount` / `claimedCount` / `truncated`: `truncated: true` means more replies remain (raise `limit`), and a `warning` field means X handed back no replies despite the root claiming some — treat that as a failed fetch, not as "no replies", and try `quoters` instead.',
+      inputSchema: {
+        target: z.string().describe('tweet id or status URL'),
+        limit: z
+          .number()
+          .int()
+          .positive()
+          .describe('max replies to collect (default 40)')
+          .optional(),
+      },
     },
-    async (args) => wrap(await runThread(getEngine(), String(args.target ?? ''))),
+    async (args) =>
+      wrap(
+        await runThread(
+          getEngine(),
+          String(args.target ?? ''),
+          args.limit !== undefined ? Number(args.limit) : undefined,
+        ),
+      ),
   );
 
   const SORT = z.enum(['relevance', 'newest', 'oldest', 'likes', 'views', 'bookmarks']);

@@ -486,9 +486,26 @@ export function parseTimeline(json: unknown, opts?: { rich?: boolean }): TweetPa
 }
 
 /**
- * Parse a TweetDetail response into a ThreadResult: the tweet matching
+ * The synthetic root a thread page yields when the focal tweet isn't among its
+ * entries — normal on every page after the first, where only replies come back.
+ */
+export function placeholderRoot(focalTweetId: string): Tweet {
+  return {
+    id: focalTweetId,
+    url: `https://x.com/i/status/${focalTweetId}`,
+    text: '',
+    author: { id: '', handle: '', name: '', verified: false },
+    metrics: {},
+  };
+}
+
+/**
+ * Parse ONE page of a TweetDetail response into a ThreadResult: the tweet matching
  * focalTweetId is the root, the rest are replies, in entry order. Carries the
  * Bottom / ShowMoreThreads cursor as nextCursor.
+ *
+ * A conversation spans many pages — the engine follows nextCursor and merges them
+ * (see paginateThread); the counts here describe this page alone.
  */
 export function parseThread(json: unknown, focalTweetId: string): ThreadResult {
   const page = parseTimeline(json);
@@ -496,14 +513,10 @@ export function parseThread(json: unknown, focalTweetId: string): ThreadResult {
   const replies = page.tweets.filter((tweet) => tweet.id !== focalTweetId);
 
   const result: ThreadResult = {
-    root: root ?? {
-      id: focalTweetId,
-      url: `https://x.com/i/status/${focalTweetId}`,
-      text: '',
-      author: { id: '', handle: '', name: '', verified: false },
-      metrics: {},
-    },
+    root: root ?? placeholderRoot(focalTweetId),
     replies,
+    returnedCount: replies.length,
+    truncated: page.nextCursor !== undefined,
   };
   if (page.nextCursor !== undefined) result.nextCursor = page.nextCursor;
   return result;
