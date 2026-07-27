@@ -286,6 +286,56 @@ function searchTimeline(entries: unknown[]) {
   };
 }
 
+/** A module entry (items[] carrying tweet_results) under an arbitrary entryId. */
+function moduleEntry(entryId: string, ids: string[]) {
+  return {
+    entryId,
+    content: {
+      entryType: 'TimelineTimelineModule',
+      items: ids.map((id) => ({
+        entryId: `${entryId}-tweet-${id}`,
+        item: {
+          itemContent: { itemType: 'TimelineTweet', tweet_results: { result: tweetWithId(id) } },
+        },
+      })),
+    },
+  };
+}
+
+describe('parseTimeline entry filtering', () => {
+  test('collects tweets from home-conversation module entries', () => {
+    // HomeLatestTimeline groups conversations under `home-conversation-*`. A live
+    // page held 77 tweets, 34 of them here — all dropped by the old accept-list.
+    const json = searchTimeline([
+      tweetEntry('tweet-100', '100'),
+      moduleEntry('home-conversation-abc', ['200', '201']),
+      bottomCursorEntry('C'),
+    ]);
+    expect(parseTimeline(json).tweets.map((t) => t.id)).toEqual(['100', '200', '201']);
+  });
+
+  test('collects tweets from an entry type we have never seen before', () => {
+    // The point of filtering by exclusion: X ships new entry types routinely, and an
+    // accept-list turns each one into silent, healthy-looking data loss.
+    const json = searchTimeline([
+      tweetEntry('tweet-100', '100'),
+      moduleEntry('some-future-entry-type-x', ['300']),
+    ]);
+    expect(parseTimeline(json).tweets.map((t) => t.id)).toEqual(['100', '300']);
+  });
+
+  test('still drops ads, recommendations and related-tweets modules that carry tweets', () => {
+    const json = searchTimeline([
+      moduleEntry('promoted-tweet-9', ['900']),
+      moduleEntry('tweetdetailrelatedtweets-0', ['901']),
+      moduleEntry('who-to-follow-1', ['902']),
+      moduleEntry('module-junk-1', ['903']),
+      tweetEntry('tweet-100', '100'),
+    ]);
+    expect(parseTimeline(json).tweets.map((t) => t.id)).toEqual(['100']);
+  });
+});
+
 describe('parseTimeline', () => {
   test('extracts tweets and sets nextCursor from the Bottom cursor entry', () => {
     const json = searchTimeline([

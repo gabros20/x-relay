@@ -391,28 +391,30 @@ export function parseTweetResult(
 
 // ── Timeline / pagination ───────────────────────────────────────────────────
 
-// Entry-id prefixes that carry tweets we want.
-const TWEET_ENTRY_PREFIXES = [
-  'tweet',
-  'search-grid',
-  'profile-conversation',
-  'profile-grid', // UserMedia timeline: a module entry whose items[] hold the tweets
-  // TweetDetail: replies are NOT top-level `tweet-` entries — X groups them into
-  // `conversationthread-<id>` module entries whose items[] hold the tweet_results.
-  // Omitting this dropped every reply in a conversation while the response looked
-  // healthy (issue #4): `ok: true`, a live cursor, and an empty replies array.
-  'conversationthread',
-];
-// Entry-id prefixes we always drop (cursors, ads, recommendations, modules-as-noise).
-// Checked BEFORE the accept list, which matters for `tweetdetailrelatedtweets-`: it
-// shares the 'tweet' prefix, so without this it would ride the accept list into
-// replies[] and pass X's recommendations off as answers to the conversation.
+/**
+ * Entries are filtered by EXCLUSION, not by an accept-list.
+ *
+ * We used to name the entry-id prefixes that carry tweets. X renames and adds entry
+ * types routinely, and every one we hadn't named became silent data loss that still
+ * looked healthy — `ok: true`, a live cursor, an empty array. It cost us every reply
+ * in every conversation (`conversationthread-*`, issue #4) and 34 of 77 tweets per
+ * page of the following feed (`home-conversation-*`). Both were invisible until
+ * someone counted. Excluding known noise fails the safe way instead: a new entry type
+ * arrives as data, and the worst case is junk we can name here later.
+ *
+ * `tweetdetailrelatedtweets` earns its place: those are X's recommendations, which
+ * would otherwise be served up as replies to the conversation. Prompt/composer
+ * entries carry no tweets today and are listed to keep them that way.
+ */
 const DROP_ENTRY_PREFIXES = [
   'cursor-',
   'promoted',
   'who-to-follow',
   'module-',
   'tweetdetailrelatedtweets',
+  'messageprompt',
+  'relevanceprompt',
+  'tweetcomposer',
 ];
 
 function startsWithAny(value: string, prefixes: string[]): boolean {
@@ -479,7 +481,6 @@ export function parseTimeline(json: unknown, opts?: { rich?: boolean }): TweetPa
     if (cursor !== undefined) nextCursor = cursor;
 
     if (startsWithAny(entryId, DROP_ENTRY_PREFIXES)) continue;
-    if (!startsWithAny(entryId, TWEET_ENTRY_PREFIXES)) continue;
 
     for (const node of entryTweetNodes(entry)) {
       try {
