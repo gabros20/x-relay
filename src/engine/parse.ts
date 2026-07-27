@@ -397,6 +397,11 @@ const TWEET_ENTRY_PREFIXES = [
   'search-grid',
   'profile-conversation',
   'profile-grid', // UserMedia timeline: a module entry whose items[] hold the tweets
+  // TweetDetail: replies are NOT top-level `tweet-` entries — X groups them into
+  // `conversationthread-<id>` module entries whose items[] hold the tweet_results.
+  // Omitting this dropped every reply in a conversation while the response looked
+  // healthy (issue #4): `ok: true`, a live cursor, and an empty replies array.
+  'conversationthread',
 ];
 // Entry-id prefixes we always drop (cursors, ads, recommendations, modules-as-noise).
 const DROP_ENTRY_PREFIXES = ['cursor-', 'promoted', 'who-to-follow', 'module-'];

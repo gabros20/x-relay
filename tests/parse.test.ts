@@ -365,7 +365,56 @@ function tweetDetail(entries: unknown[]) {
   };
 }
 
+/**
+ * The shape X actually returns for a conversation: replies are NOT top-level
+ * `tweet-<id>` entries — they arrive grouped in `conversationthread-<id>` module
+ * entries whose `items[]` carry the tweet_results. Captured from a live
+ * TweetDetail response for tweet 1828078003579920674 (issue #4).
+ */
+function conversationThreadEntry(threadId: string, replyIds: string[]) {
+  return {
+    entryId: `conversationthread-${threadId}`,
+    content: {
+      entryType: 'TimelineTimelineModule',
+      items: replyIds.map((id) => ({
+        entryId: `conversationthread-${threadId}-tweet-${id}`,
+        item: {
+          itemContent: { itemType: 'TimelineTweet', tweet_results: { result: tweetWithId(id) } },
+        },
+      })),
+    },
+  };
+}
+
 describe('parseThread', () => {
+  test('collects replies out of conversationthread module entries (issue #4)', () => {
+    const json = tweetDetail([
+      tweetEntry('tweet-500', '500'),
+      conversationThreadEntry('501', ['501']),
+      conversationThreadEntry('502', ['502', '503']),
+      {
+        entryId: 'cursor-bottom-9',
+        content: { entryType: 'TimelineTimelineCursor', cursorType: 'Bottom', value: 'MORE' },
+      },
+    ]);
+    const thread = parseThread(json, '500');
+    expect(thread.root.id).toBe('500');
+    expect(thread.replies.map((t) => t.id)).toEqual(['501', '502', '503']);
+    expect(thread.returnedCount).toBe(3);
+    expect(thread.nextCursor).toBe('MORE');
+  });
+
+  test('a conversationthread entry repeating the focal tweet does not duplicate the root', () => {
+    const json = tweetDetail([
+      tweetEntry('tweet-500', '500'),
+      // X often re-emits the focal tweet as the head of its own conversation thread.
+      conversationThreadEntry('500', ['500', '501']),
+    ]);
+    const thread = parseThread(json, '500');
+    expect(thread.root.id).toBe('500');
+    expect(thread.replies.map((t) => t.id)).toEqual(['501']);
+  });
+
   test('splits root vs replies by focalTweetId and carries nextCursor', () => {
     const json = tweetDetail([
       tweetEntry('tweet-500', '500'),
