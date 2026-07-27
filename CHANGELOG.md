@@ -1,3 +1,11 @@
+## [1.5.4](https://github.com/gabros20/x-relay/compare/v1.5.3...v1.5.4) (2026-07-27)
+
+
+### Bug Fixes
+
+* **parse:** drop X's related-tweets module from thread replies ([2c61283](https://github.com/gabros20/x-relay/commit/2c6128346a2690149950d24516af5a5e31e9cdee))
+* **parse:** filter timeline entries by exclusion, not by an accept-list ([5827398](https://github.com/gabros20/x-relay/commit/5827398abdfba1bd58fea88c4202e4b24b1542f4)), closes [#4](https://github.com/gabros20/x-relay/issues/4)
+
 ## [1.5.3](https://github.com/gabros20/x-relay/compare/v1.5.2...v1.5.3) (2026-07-27)
 
 
