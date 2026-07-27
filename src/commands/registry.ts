@@ -35,8 +35,12 @@ export const COMMANDS: CommandDef[] = [
   {
     name: 'thread',
     cost: 'expensive — full read',
-    summary: 'A tweet plus its reply thread. Read only the finalists.',
-    usage: 'xrelay thread <id|url>',
+    summary: 'A tweet plus its reply conversation (cursor-followed). Read only the finalists.',
+    usage:
+      'xrelay thread <id|url> [--limit N]   # N = max replies across pages (default 40)\n' +
+      '       Check returnedCount / claimedCount / truncated in the result. `truncated: true`\n' +
+      '       means more replies remain — raise --limit. A `warning` field means X returned no\n' +
+      '       replies despite the root claiming some: a failed fetch, NOT "no replies".',
   },
   {
     name: 'bookmarks',
@@ -176,7 +180,9 @@ export const COMMANDS: CommandDef[] = [
       'xrelay batch --file queries.txt (--out merged.json | --stdout)\n' +
       '       [--delay 2000] [--limit N] [--product Top|Latest|Media|People] [--quiet]\n' +
       '       One query per line; blank lines and # comments are skipped. Progress prints to stderr.\n' +
-      '       --out MERGES into an existing archive at that path (incremental).',
+      '       --out MERGES into an existing archive at that path, and is rewritten after EVERY\n' +
+      '       query — so a killed run keeps everything up to the last completed query (re-run\n' +
+      '       the same command to resume), and watching the file grow works as a progress signal.',
   },
   {
     name: 'dedupe',
