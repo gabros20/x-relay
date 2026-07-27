@@ -1,3 +1,11 @@
+## [1.5.2](https://github.com/gabros20/x-relay/compare/v1.5.1...v1.5.2) (2026-07-27)
+
+
+### Bug Fixes
+
+* **batch:** persist the archive after every query, not once at the end ([4cd6732](https://github.com/gabros20/x-relay/commit/4cd673289b1519d0412e7be2a86aba20b19a9098)), closes [#5](https://github.com/gabros20/x-relay/issues/5)
+* **thread:** follow the conversation cursor instead of reading page 1 only ([7c9cbd0](https://github.com/gabros20/x-relay/commit/7c9cbd0be52226adb72121e9ed8eaefd7869e715)), closes [#4](https://github.com/gabros20/x-relay/issues/4)
+
 ## [1.5.1](https://github.com/gabros20/x-relay/compare/v1.5.0...v1.5.1) (2026-07-23)
 
 
