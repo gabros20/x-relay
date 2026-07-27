@@ -1,3 +1,10 @@
+## [1.5.3](https://github.com/gabros20/x-relay/compare/v1.5.2...v1.5.3) (2026-07-27)
+
+
+### Bug Fixes
+
+* **parse:** collect thread replies from conversationthread entries ([9127816](https://github.com/gabros20/x-relay/commit/9127816bd2ff569687475680fc05bd2cd6852178)), closes [#4](https://github.com/gabros20/x-relay/issues/4)
+
 ## [1.5.2](https://github.com/gabros20/x-relay/compare/v1.5.1...v1.5.2) (2026-07-27)
 
 
