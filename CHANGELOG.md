@@ -1,3 +1,10 @@
+## [1.5.5](https://github.com/gabros20/x-relay/compare/v1.5.4...v1.5.5) (2026-08-16)
+
+
+### Bug Fixes
+
+* **skill:** add YAML frontmatter to SKILL.md so agents can match it by intent ([7a96791](https://github.com/gabros20/x-relay/commit/7a96791707507709eb99f3e41a9f88891060cb98))
+
 ## [1.5.4](https://github.com/gabros20/x-relay/compare/v1.5.3...v1.5.4) (2026-07-27)
 
 
