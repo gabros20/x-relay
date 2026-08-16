@@ -1,3 +1,8 @@
+---
+name: x-relay
+description: Research, archive, and post to X/Twitter via the `xrelay` CLI — wide-net search, cheap metadata ranking, full thread reads only for the finalists, plus profiles, timelines, bookmarks, likes, home feed, and full-fidelity JSON archives. Use whenever a task involves finding, reading, or capturing X/Twitter posts and threads ("what's being said about X", "read this thread", "search X for…", "my bookmarks"), or when an x.com/twitter.com URL appears and its content is needed. Also writes — post, reply, quote, like, follow — which mutate the live account and need explicit human approval first.
+---
+
 # x-relay
 
 A **read + archive + write tool for X/Twitter** for AI agents — a CLI (`xrelay`), an MCP server, and this skill.

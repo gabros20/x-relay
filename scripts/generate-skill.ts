@@ -8,6 +8,18 @@ const outPath = join(outDir, 'skill.ts');
 
 const contents = readFileSync(skillPath, 'utf8');
 
+// Agent Skills hosts match a skill by its frontmatter `description`. Without it the skill still
+// loads but registers with no description, so no agent picks it up by intent.
+const frontmatter = /^---\n([\s\S]*?)\n---\n/.exec(contents)?.[1];
+if (!frontmatter) {
+  throw new Error(`generate-skill: ${skillPath} has no YAML frontmatter (needs name + description)`);
+}
+for (const key of ['name', 'description']) {
+  if (!new RegExp(`^${key}:\\s*\\S`, 'm').test(frontmatter)) {
+    throw new Error(`generate-skill: ${skillPath} frontmatter is missing \`${key}:\``);
+  }
+}
+
 mkdirSync(outDir, { recursive: true });
 
 writeFileSync(
