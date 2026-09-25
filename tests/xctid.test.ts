@@ -130,40 +130,59 @@ describe('handleXMigration', () => {
       return new Response(routes(u), { status: 200 });
     }) as unknown as typeof fetch;
 
-  test('skips a migrated path and returns the first shell that carries the runtime', async () => {
+  const noSleep = { sleep: async () => {} };
+
+  test('skips migrated paths and returns the first shell that carries the runtime', async () => {
     const seen: string[] = [];
     const fetchImpl = fakeFetch((u) => {
-      if (u.endsWith('/i/flow/login')) return shell('login', false); // migrated → no runtime
-      if (u.endsWith('/home')) return shell('home', true); // legacy → has runtime
-      return shell('explore', true);
+      if (u.endsWith('/i/bookmarks')) return shell('bookmarks', false); // migrated → no runtime
+      if (u.endsWith('/settings')) return shell('settings', true); // legacy → has runtime
+      return shell('later', true);
     }, seen);
 
-    const doc = await handleXMigration(fetchImpl);
+    const doc = await handleXMigration(fetchImpl, noSleep);
     expect(doc.documentElement.outerHTML).toContain('ondemand.s');
-    expect(doc.documentElement.outerHTML).toContain('home');
-    // stops at /home; never falls through to /explore
-    expect(seen.some((u) => u.endsWith('/i/flow/login'))).toBe(true);
-    expect(seen.some((u) => u.endsWith('/home'))).toBe(true);
-    expect(seen.some((u) => u.endsWith('/explore'))).toBe(false);
+    expect(doc.documentElement.outerHTML).toContain('settings');
+    // stops at the first legacy shell; never falls through to later paths
+    expect(seen.map((u) => new URL(u).pathname)).toEqual(['/i/bookmarks', '/settings']);
   });
 
   test('returns the first shell immediately when it already carries the runtime', async () => {
     const seen: string[] = [];
-    const fetchImpl = fakeFetch(() => shell('login', true), seen);
-    const doc = await handleXMigration(fetchImpl);
+    const fetchImpl = fakeFetch(() => shell('first', true), seen);
+    const doc = await handleXMigration(fetchImpl, noSleep);
     expect(doc.documentElement.outerHTML).toContain('ondemand.s');
     expect(seen).toHaveLength(1);
-    expect(seen[0]?.endsWith('/i/flow/login')).toBe(true);
+  });
+
+  test('keeps trying further rounds while X serves the legacy shell only per request', async () => {
+    // The rollout is a per-request split: the first full pass gets only x-web shells,
+    // the same path serves the legacy runtime on a later round.
+    const seen: string[] = [];
+    let calls = 0;
+    const fetchImpl = fakeFetch((u) => {
+      calls += 1;
+      return u.endsWith('/home') && calls > 7 ? shell('home-round-2', true) : shell('xweb', false);
+    }, seen);
+    const sleeps: number[] = [];
+    const doc = await handleXMigration(fetchImpl, { sleep: async (ms) => void sleeps.push(ms) });
+    expect(doc.documentElement.outerHTML).toContain('home-round-2');
+    expect(sleeps).toHaveLength(1); // exactly one pause, between round 1 and round 2
+    expect(sleeps[0]).toBeGreaterThanOrEqual(400);
+    expect(seen.length).toBe(7 + 4); // full first round, then /i/bookmarks, /settings, /notifications, /home
   });
 
   test('falls back to the last fetched document when no path carries the runtime', async () => {
-    const fetchImpl = fakeFetch((u) =>
-      u.endsWith('/explore') ? shell('explore-last', false) : shell('other', false),
+    const seen: string[] = [];
+    const fetchImpl = fakeFetch(
+      (u) => (u.endsWith('/i/flow/login') ? shell('login-last', false) : shell('other', false)),
+      seen,
     );
-    const doc = await handleXMigration(fetchImpl);
-    // last path tried is /explore → its document is returned even without the runtime,
+    const doc = await handleXMigration(fetchImpl, { rounds: 2, ...noSleep });
+    // last path tried is /i/flow/login → its document is returned even without the runtime,
     // so the downstream generator throws the precise ondemand error, not a transport one.
-    expect(doc.documentElement.outerHTML).toContain('explore-last');
+    expect(doc.documentElement.outerHTML).toContain('login-last');
+    expect(seen).toHaveLength(14); // 7 paths × 2 rounds
   });
 
   test('rethrows when every candidate fetch fails', async () => {
@@ -172,7 +191,7 @@ describe('handleXMigration', () => {
         status: 503,
         statusText: 'Service Unavailable',
       })) as unknown as typeof fetch;
-    await expect(handleXMigration(fetchImpl)).rejects.toMatchObject({
+    await expect(handleXMigration(fetchImpl, noSleep)).rejects.toMatchObject({
       code: 'X_HOMEPAGE_FETCH_ERROR',
     });
   });

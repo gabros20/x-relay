@@ -476,13 +476,16 @@ const MAX_NOTFOUND_RETRIES = 2;
 const RETRY_BACKOFF_MS = 400;
 
 /** A lazy x-client-transaction-id provider that (re)initializes from the X homepage. */
-function createTransactionProvider(fetchImpl?: typeof fetch): {
+function createTransactionProvider(
+  fetchImpl?: typeof fetch,
+  sleep?: (ms: number) => Promise<void>,
+): {
   provider: TransactionProvider;
   refresh: () => Promise<void>;
 } {
   let ctPromise: Promise<ClientTransaction> | undefined;
   const init = async (): Promise<ClientTransaction> =>
-    ClientTransaction.create(await handleXMigration(fetchImpl));
+    ClientTransaction.create(await handleXMigration(fetchImpl, { sleep }));
   const get = (): Promise<ClientTransaction> => {
     if (ctPromise === undefined) ctPromise = init();
     return ctPromise;
@@ -767,7 +770,7 @@ export function createEngine(deps: EngineDeps): Engine {
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const txn = deps.transaction
     ? { provider: deps.transaction, refresh: async () => {} }
-    : createTransactionProvider(deps.fetchImpl);
+    : createTransactionProvider(deps.fetchImpl, sleep);
 
   // Resolve the session pool: XRELAY_ACCOUNTS (multi-account) or a single
   // session from deps.cookies / the browser, each optionally behind a proxy.

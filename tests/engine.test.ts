@@ -321,6 +321,11 @@ describe('bookmarks incremental (stopAtId)', () => {
 });
 
 describe('cold-start resilience', () => {
+  // Inject the transaction-id provider: these tests cover the NOT_FOUND retry budget, and the
+  // default provider bootstraps from the LIVE x.com shell (network-dependent, and slow now that
+  // the bootstrap retries across X's gradual x-web rollout).
+  const stubTransaction = async (): Promise<string> => 'test-txid';
+
   test('retries a transient NOT_FOUND (refresh + backoff) then succeeds', async () => {
     let calls = 0;
     const client: EngineClient = {
@@ -331,7 +336,12 @@ describe('cold-start resilience', () => {
         return { ok: true, value: timeline(['1']) };
       },
     };
-    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    const engine = createEngine({
+      cookies,
+      client,
+      transaction: stubTransaction,
+      sleep: async () => {},
+    });
     const res = await engine.search('x', { limit: 1 });
     expect(res.tweets.map((t) => t.id)).toEqual(['1']);
     expect(calls).toBe(3);
@@ -341,7 +351,12 @@ describe('cold-start resilience', () => {
     const client: EngineClient = {
       get: async () => ({ ok: false, error: { code: 'NOT_FOUND', status: 404, message: 'x' } }),
     };
-    const engine = createEngine({ cookies, client, sleep: async () => {} });
+    const engine = createEngine({
+      cookies,
+      client,
+      transaction: stubTransaction,
+      sleep: async () => {},
+    });
     await expect(engine.search('x', { limit: 1 })).rejects.toThrow(EngineError);
   });
 });

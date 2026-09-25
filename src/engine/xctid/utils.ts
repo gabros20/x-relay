@@ -28,18 +28,44 @@ const BROWSER_HEADERS: Record<string, string> = {
 export const ON_DEMAND_MARKER = 'ondemand.s';
 
 /**
- * X paths whose logged-out HTML still ships the legacy `responsive-web` runtime
+ * X paths whose logged-out HTML may still ship the legacy `responsive-web` runtime
  * (the site-verification key + `loading-x-anim` frames + the `ondemand.s` webpack
  * manifest) that the x-client-transaction-id generator initializes from. Tried in
  * order; the first one that carries the runtime wins.
  *
  * Why not the root `/`: X migrated `https://x.com` (and profile pages) to a new
  * "x-web" frontend whose logged-out shell no longer inlines that runtime, so a
- * root fetch now yields a Document the generator can't bootstrap from. These paths
- * remain on the legacy shell. `/i/flow/login` is an intentionally logged-out page,
- * so an anonymous fetch of it is both semantically correct and stable.
+ * root fetch now yields a Document the generator can't bootstrap from.
+ *
+ * 2026-09: X is rolling "x-web" out to these paths too, as a PER-REQUEST split —
+ * the same URL returns the legacy shell only some of the time (measured: ~0–50%
+ * per path, /i/flow/login ~0%). So one pass over three paths now fails most runs.
+ * The list is ordered by measured legacy rate and walked for several rounds
+ * (BOOTSTRAP_ROUNDS); every candidate is a logged-out-renderable page.
  */
-const BOOTSTRAP_PATHS = ['/i/flow/login', '/home', '/explore'] as const;
+const BOOTSTRAP_PATHS = [
+  '/i/bookmarks',
+  '/settings',
+  '/notifications',
+  '/home',
+  '/explore',
+  '/i/flow/signup',
+  '/i/flow/login',
+] as const;
+
+/** Passes over BOOTSTRAP_PATHS before giving up (7 paths × 4 rounds = 28 fetches worst case). */
+const BOOTSTRAP_ROUNDS = 4;
+/** Jittered pause between rounds, so the retries don't read as a tight scraping loop. */
+const BOOTSTRAP_ROUND_DELAY_MS = [400, 1200] as const;
+
+export interface HandleXMigrationOptions {
+  rounds?: number;
+  /** Injectable for tests; defaults to a real timer. */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+const defaultSleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
 
 const MIGRATION_REDIRECTION_REGEX =
   /(http(?:s)?:\/\/(?:www\.)?(twitter|x){1}\.com(\/x)?\/migrate([/?])?tok=[a-zA-Z0-9%\-_]+)+/i;
@@ -99,23 +125,35 @@ async function fetchShellDocument(
  * Fetches an X shell that still carries the responsive-web runtime and returns its
  * Document. Follows the migration redirect + form on each candidate path.
  *
- * Tries BOOTSTRAP_PATHS in order and returns the first Document whose HTML still
- * contains the `ondemand.s` runtime. If none do (a future X migration of these
- * paths too), the last successfully fetched Document is returned so the downstream
- * generator throws the precise OnDemandFileUrlResolutionError rather than a vague
- * transport error. Only if every candidate fetch itself failed do we rethrow.
+ * Walks BOOTSTRAP_PATHS for up to `rounds` passes (X serves the legacy shell per
+ * request, see BOOTSTRAP_PATHS) and returns the first Document whose HTML still
+ * contains the `ondemand.s` runtime. If none do (X finished migrating these paths),
+ * the last successfully fetched Document is returned so the downstream generator
+ * throws the precise OnDemandFileUrlResolutionError rather than a vague transport
+ * error. Only if every candidate fetch itself failed do we rethrow.
  */
-export async function handleXMigration(fetchImpl: typeof fetch = fetch): Promise<XDocument> {
+export async function handleXMigration(
+  fetchImpl: typeof fetch = fetch,
+  options: HandleXMigrationOptions = {},
+): Promise<XDocument> {
+  const rounds = Math.max(1, options.rounds ?? BOOTSTRAP_ROUNDS);
+  const sleep = options.sleep ?? defaultSleep;
   let lastDocument: XDocument | undefined;
   let lastError: unknown;
 
-  for (const path of BOOTSTRAP_PATHS) {
-    try {
-      const { document, html } = await fetchShellDocument(`https://x.com${path}`, fetchImpl);
-      lastDocument = document;
-      if (html.includes(ON_DEMAND_MARKER)) return document;
-    } catch (error) {
-      lastError = error;
+  for (let round = 0; round < rounds; round += 1) {
+    if (round > 0) {
+      const [min, max] = BOOTSTRAP_ROUND_DELAY_MS;
+      await sleep(min + Math.floor(Math.random() * (max - min)));
+    }
+    for (const path of BOOTSTRAP_PATHS) {
+      try {
+        const { document, html } = await fetchShellDocument(`https://x.com${path}`, fetchImpl);
+        lastDocument = document;
+        if (html.includes(ON_DEMAND_MARKER)) return document;
+      } catch (error) {
+        lastError = error;
+      }
     }
   }
 
