@@ -1,3 +1,10 @@
+## [1.5.6](https://github.com/gabros20/x-relay/compare/v1.5.5...v1.5.6) (2026-09-25)
+
+
+### Bug Fixes
+
+* **xctid:** retry the bootstrap across X's per-request x-web rollout ([fe507eb](https://github.com/gabros20/x-relay/commit/fe507eb723543bb57e19ff59675e9fb7cb8ffe93))
+
 ## [1.5.5](https://github.com/gabros20/x-relay/compare/v1.5.4...v1.5.5) (2026-08-16)
 
 
