@@ -4,7 +4,7 @@ import Cubic from '../src/engine/xctid/cubic.ts';
 import { InterpolationInputError } from '../src/engine/xctid/errors.ts';
 import { interpolate } from '../src/engine/xctid/interpolate.ts';
 import { convertRotationToMatrix } from '../src/engine/xctid/rotation.ts';
-import { assembleTransactionId } from '../src/engine/xctid/transaction.ts';
+import { assembleTransactionId, resolveSignChunkUrl } from '../src/engine/xctid/transaction.ts';
 import { floatToHex, handleXMigration, isOdd } from '../src/engine/xctid/utils.ts';
 
 describe('isOdd', () => {
@@ -135,6 +135,7 @@ describe('handleXMigration', () => {
   test('skips migrated paths and returns the first shell that carries the runtime', async () => {
     const seen: string[] = [];
     const fetchImpl = fakeFetch((u) => {
+      if (new URL(u).pathname === '/') return shell('root', false); // x-web, no frames → unusable
       if (u.endsWith('/i/bookmarks')) return shell('bookmarks', false); // migrated → no runtime
       if (u.endsWith('/settings')) return shell('settings', true); // legacy → has runtime
       return shell('later', true);
@@ -144,7 +145,24 @@ describe('handleXMigration', () => {
     expect(doc.documentElement.outerHTML).toContain('ondemand.s');
     expect(doc.documentElement.outerHTML).toContain('settings');
     // stops at the first legacy shell; never falls through to later paths
-    expect(seen.map((u) => new URL(u).pathname)).toEqual(['/i/bookmarks', '/settings']);
+    expect(seen.map((u) => new URL(u).pathname)).toEqual(['/', '/i/bookmarks', '/settings']);
+  });
+
+  // 2026-09-25: every logged-out path is now x-web (307 → /i/jf/onboarding), and
+  // the root x-web shell still carries the verification key and the four
+  // loading-x-anim frames. Only the indices moved, into a lazy `sign.o` chunk.
+  test('accepts the x-web shell when it carries the key, the frames and its entry script', async () => {
+    const xweb =
+      '<html><head><meta name="twitter-site-verification" content="k"/>' +
+      '<script type="module" src="https://abs.twimg.com/x-web/x-web/entry-client-logged-out-Ab12.js"></script>' +
+      '</head><body><svg id="loading-x-anim-0"></svg></body></html>';
+    const seen: string[] = [];
+    const doc = await handleXMigration(
+      fakeFetch(() => xweb, seen),
+      noSleep,
+    );
+    expect(doc.documentElement.outerHTML).toContain('entry-client-logged-out');
+    expect(seen.map((u) => new URL(u).pathname)).toEqual(['/']);
   });
 
   test('returns the first shell immediately when it already carries the runtime', async () => {
@@ -162,14 +180,14 @@ describe('handleXMigration', () => {
     let calls = 0;
     const fetchImpl = fakeFetch((u) => {
       calls += 1;
-      return u.endsWith('/home') && calls > 7 ? shell('home-round-2', true) : shell('xweb', false);
+      return u.endsWith('/home') && calls > 8 ? shell('home-round-2', true) : shell('xweb', false);
     }, seen);
     const sleeps: number[] = [];
     const doc = await handleXMigration(fetchImpl, { sleep: async (ms) => void sleeps.push(ms) });
     expect(doc.documentElement.outerHTML).toContain('home-round-2');
     expect(sleeps).toHaveLength(1); // exactly one pause, between round 1 and round 2
     expect(sleeps[0]).toBeGreaterThanOrEqual(400);
-    expect(seen.length).toBe(7 + 4); // full first round, then /i/bookmarks, /settings, /notifications, /home
+    expect(seen.length).toBe(8 + 5); // full first round, then /, /i/bookmarks, /settings, /notifications, /home
   });
 
   test('falls back to the last fetched document when no path carries the runtime', async () => {
@@ -182,7 +200,7 @@ describe('handleXMigration', () => {
     // last path tried is /i/flow/login → its document is returned even without the runtime,
     // so the downstream generator throws the precise ondemand error, not a transport one.
     expect(doc.documentElement.outerHTML).toContain('login-last');
-    expect(seen).toHaveLength(14); // 7 paths × 2 rounds
+    expect(seen).toHaveLength(16); // 8 paths × 2 rounds
   });
 
   test('rethrows when every candidate fetch fails', async () => {
@@ -194,5 +212,56 @@ describe('handleXMigration', () => {
     await expect(handleXMigration(fetchImpl, noSleep)).rejects.toMatchObject({
       code: 'X_HOMEPAGE_FETCH_ERROR',
     });
+  });
+});
+
+describe('resolveSignChunkUrl', () => {
+  const ENTRY = 'https://abs.twimg.com/x-web/x-web/entry-client-logged-out-Ab12.js';
+  const html = `<script type="module" src="${ENTRY}"></script>`;
+  const files = (map: Record<string, string>, seen?: string[]): typeof fetch =>
+    (async (url: string | URL | Request): Promise<Response> => {
+      const u = url.toString();
+      seen?.push(u);
+      const body = map[u];
+      return body === undefined ? new Response('', { status: 404 }) : new Response(body);
+    }) as unknown as typeof fetch;
+
+  // Live shape: the entry statically imports assets/sentry-filter-*.js, which
+  // lazy-loads the signer with import(`./sign.o-<hash>.js`), relative to itself.
+  test('follows the entry into the chunk that lazy-loads the signer', async () => {
+    const seen: string[] = [];
+    const url = await resolveSignChunkUrl(
+      html,
+      files(
+        {
+          [ENTRY]:
+            'import{a as b}from"./assets/react-X1.js";import{t as v}from"./assets/sentry-filter-Q9.js";',
+          'https://abs.twimg.com/x-web/x-web/assets/react-X1.js': 'export{}',
+          'https://abs.twimg.com/x-web/x-web/assets/sentry-filter-Q9.js':
+            'function af(){return import(`./sign.o-C5ulstet.js`).then(e=>e.default())}',
+        },
+        seen,
+      ),
+    );
+    expect(url).toBe('https://abs.twimg.com/x-web/x-web/assets/sign.o-C5ulstet.js');
+    expect(seen).toHaveLength(3);
+  });
+
+  test('uses a reference in the entry itself without fetching further', async () => {
+    const seen: string[] = [];
+    const url = await resolveSignChunkUrl(
+      html,
+      files({ [ENTRY]: 'x=()=>import("./assets/sign.o-Zz9.js")' }, seen),
+    );
+    expect(url).toBe('https://abs.twimg.com/x-web/x-web/assets/sign.o-Zz9.js');
+    expect(seen).toEqual([ENTRY]);
+  });
+
+  test('returns null when the shell has no x-web entry', async () => {
+    expect(await resolveSignChunkUrl('<html></html>', files({}))).toBeNull();
+  });
+
+  test('returns null when no chunk references the signer', async () => {
+    expect(await resolveSignChunkUrl(html, files({ [ENTRY]: 'export{}' }))).toBeNull();
   });
 });

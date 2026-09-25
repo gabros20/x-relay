@@ -44,6 +44,11 @@ export const ON_DEMAND_MARKER = 'ondemand.s';
  * (BOOTSTRAP_ROUNDS); every candidate is a logged-out-renderable page.
  */
 const BOOTSTRAP_PATHS = [
+  // 2026-09-25: the root now serves the x-web shell, which dropped `ondemand.s`
+  // but still carries the verification key and the loading-x-anim frames; the
+  // indices moved into a lazy `sign.o` chunk (see resolveSignChunkUrl). Tried
+  // first because it is the one path that reliably answers 200 with a shell.
+  '/',
   '/i/bookmarks',
   '/settings',
   '/notifications',
@@ -53,10 +58,28 @@ const BOOTSTRAP_PATHS = [
   '/i/flow/login',
 ] as const;
 
-/** Passes over BOOTSTRAP_PATHS before giving up (7 paths × 4 rounds = 28 fetches worst case). */
+/** Passes over BOOTSTRAP_PATHS before giving up (8 paths × 4 rounds = 32 fetches worst case). */
 const BOOTSTRAP_ROUNDS = 4;
 /** Jittered pause between rounds, so the retries don't read as a tight scraping loop. */
 const BOOTSTRAP_ROUND_DELAY_MS = [400, 1200] as const;
+
+/** The x-web frontend's module entry, which leads to the `sign.o` signer chunk. */
+export const X_WEB_ENTRY_REGEX =
+  /https:\/\/abs\.twimg\.com\/x-web\/[^"'`\s]*entry-client[^"'`\s]*\.js/;
+
+/**
+ * Whether a shell can bootstrap the generator: either the legacy runtime, or an
+ * x-web shell carrying all three of the key, the animation frames and the entry
+ * that leads to the indices.
+ */
+export function isUsableShell(html: string): boolean {
+  if (html.includes(ON_DEMAND_MARKER)) return true;
+  return (
+    html.includes('twitter-site-verification') &&
+    html.includes('loading-x-anim') &&
+    X_WEB_ENTRY_REGEX.test(html)
+  );
+}
 
 export interface HandleXMigrationOptions {
   rounds?: number;
@@ -150,7 +173,7 @@ export async function handleXMigration(
       try {
         const { document, html } = await fetchShellDocument(`https://x.com${path}`, fetchImpl);
         lastDocument = document;
-        if (html.includes(ON_DEMAND_MARKER)) return document;
+        if (isUsableShell(html)) return document;
       } catch (error) {
         lastError = error;
       }

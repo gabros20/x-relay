@@ -17,7 +17,7 @@ import {
 } from './errors.ts';
 import { interpolate } from './interpolate.ts';
 import { convertRotationToMatrix } from './rotation.ts';
-import { floatToHex, isOdd } from './utils.ts';
+import { X_WEB_ENTRY_REGEX, floatToHex, isOdd } from './utils.ts';
 
 const ON_DEMAND_CHUNK_NAME = 'ondemand.s';
 const INDICES_REGEX = /\(\w\[(\d{1,2})\],\s*16\)/g;
@@ -28,6 +28,50 @@ const DEFAULT_KEYWORD = 'obfiowerehiring';
 const ADDITIONAL_RANDOM_NUMBER = 3;
 /** X's custom epoch (seconds) subtracted from Unix time. Stable since 2023. */
 const EPOCH_SECONDS = 1682924400;
+
+/** A lazy `import()` of the x-web signer chunk, relative to the importing module. */
+const SIGN_CHUNK_IMPORT_REGEX = /import\(\s*[`'"](\.{1,2}\/[^`'"]*sign\.o-[A-Za-z0-9_-]+\.js)[`'"]/;
+/** Static relative imports of an ES module: `from"./assets/x.js"`. */
+const STATIC_IMPORT_REGEX = /from\s*["'](\.{1,2}\/[^"']+\.js)["']/g;
+
+/**
+ * Finds the x-web `sign.o` chunk — where the key-byte indices live since X
+ * dropped `ondemand.s` from its shell (2026-09-25). Its name is content-hashed,
+ * so it is discovered, not hardcoded: the shell names the entry module, and
+ * either the entry or one of its static imports (live: `sentry-filter-*.js`)
+ * lazy-loads the signer. Returns null when the trail is missing, so the caller
+ * throws the precise resolution error.
+ */
+export async function resolveSignChunkUrl(
+  html: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<string | null> {
+  const entryUrl = X_WEB_ENTRY_REGEX.exec(html)?.[0];
+  if (entryUrl === undefined) return null;
+
+  const read = async (url: string): Promise<string | null> => {
+    try {
+      const res = await fetchImpl(url);
+      return res.ok ? await res.text() : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const entry = await read(entryUrl);
+  if (entry === null) return null;
+  const direct = SIGN_CHUNK_IMPORT_REGEX.exec(entry)?.[1];
+  if (direct !== undefined) return new URL(direct, entryUrl).toString();
+
+  for (const [, spec] of entry.matchAll(STATIC_IMPORT_REGEX)) {
+    if (spec === undefined) continue;
+    const moduleUrl = new URL(spec, entryUrl).toString();
+    const source = await read(moduleUrl);
+    const ref = source === null ? undefined : SIGN_CHUNK_IMPORT_REGEX.exec(source)?.[1];
+    if (ref !== undefined) return new URL(ref, moduleUrl).toString();
+  }
+  return null;
+}
 
 function resolveOnDemandFileUrlFromRuntime(runtimeSource: string): string | null {
   const match = ON_DEMAND_FILE_HASH_REGEX.exec(runtimeSource);
@@ -99,7 +143,7 @@ export class ClientTransaction {
   }
 
   private async getIndices(): Promise<[number, number[]]> {
-    const onDemandFileUrl = this.getOnDemandFileUrl();
+    const onDemandFileUrl = await this.getIndicesSourceUrl();
     const onDemandFileResponse = await fetch(onDemandFileUrl);
     if (!onDemandFileResponse.ok) {
       throw new OnDemandFileFetchError(
@@ -119,6 +163,17 @@ export class ClientTransaction {
     }
     if (!indices.length) throw new KeyByteIndicesExtractionError();
     return [indices[0] ?? 0, indices.slice(1)];
+  }
+
+  /** The legacy `ondemand.s` chunk if the shell names one, else the x-web signer. */
+  private async getIndicesSourceUrl(): Promise<string> {
+    try {
+      return this.getOnDemandFileUrl();
+    } catch (error) {
+      const signUrl = await resolveSignChunkUrl(this.homePageDocument.documentElement.outerHTML);
+      if (signUrl !== null) return signUrl;
+      throw error;
+    }
   }
 
   private getOnDemandFileUrl(): string {

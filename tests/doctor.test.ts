@@ -58,6 +58,24 @@ function greenDeps(overrides: Partial<DoctorDeps> = {}): DoctorDeps {
 const byName = (report: DoctorReport, name: string) => report.checks.find((c) => c.name === name);
 
 describe('runDoctor', () => {
+  // 2026-09-25: X serves only the x-web shell now. It has no ondemand.s, but it
+  // carries everything the generator needs; doctor must not call that drift.
+  test('an x-web shell with the key, frames and entry passes the bootstrap check', async () => {
+    const xweb =
+      '<html><head><meta name="twitter-site-verification" content="k"/>' +
+      '<script type="module" src="https://abs.twimg.com/x-web/x-web/entry-client-logged-out-A1.js"></script>' +
+      '</head><body><svg id="loading-x-anim-0"></svg></body></html>';
+    const env = await runDoctor(
+      stubEngine({}),
+      {},
+      greenDeps({
+        fetchImpl: (async () => new Response(xweb, { status: 200 })) as unknown as typeof fetch,
+      }),
+    );
+    if (!env.ok) throw new Error('expected Ok envelope');
+    expect(byName(env.data, 'bootstrap')?.ok).toBe(true);
+  });
+
   test('all-green: env cookies present, whoami ok, search ok → healthy, 5 checks', async () => {
     const env = await runDoctor(stubEngine({}), {}, greenDeps());
     expect(env.ok).toBe(true);

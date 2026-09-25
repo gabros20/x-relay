@@ -12,7 +12,7 @@ import { lstatSync, realpathSync } from 'node:fs';
 import type { Cookies } from '../engine/auth.ts';
 import { getCookies } from '../engine/cookies.ts';
 import { type Engine, EngineError } from '../engine/index.ts';
-import { ON_DEMAND_MARKER, handleXMigration } from '../engine/xctid/index.ts';
+import { ON_DEMAND_MARKER, handleXMigration, isUsableShell } from '../engine/xctid/index.ts';
 import { err, ok } from '../output.ts';
 import type { Envelope } from '../types.ts';
 
@@ -158,19 +158,21 @@ async function checkBootstrap(deps: DoctorDeps): Promise<DoctorCheck> {
   const fetchImpl = deps.fetchImpl ?? fetch;
   try {
     const document = await handleXMigration(fetchImpl);
-    if (!document.documentElement.outerHTML.includes(ON_DEMAND_MARKER)) {
+    const html = document.documentElement.outerHTML;
+    if (!isUsableShell(html)) {
       return {
         name: 'bootstrap',
         ok: false,
         detail:
-          'X shell fetched but the transaction-id runtime (ondemand chunk) is absent — ' +
-          'X frontend drift; update the bootstrap paths in src/engine/xctid/utils.ts.',
+          'X shell fetched but it carries neither the ondemand runtime nor the x-web key, ' +
+          'frames and entry — X frontend drift; see src/engine/xctid/utils.ts.',
       };
     }
+    const kind = html.includes(ON_DEMAND_MARKER) ? 'responsive-web (ondemand.s)' : 'x-web (sign.o)';
     return {
       name: 'bootstrap',
       ok: true,
-      detail: 'X responsive-web shell resolved; transaction-id runtime present.',
+      detail: `X ${kind} shell resolved; transaction-id runtime present.`,
     };
   } catch (e) {
     const code = e instanceof Error ? ((e as { code?: string }).code ?? 'ERROR') : 'ERROR';
