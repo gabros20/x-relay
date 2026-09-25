@@ -1,3 +1,10 @@
+## [1.5.7](https://github.com/gabros20/x-relay/compare/v1.5.6...v1.5.7) (2026-09-25)
+
+
+### Bug Fixes
+
+* **xctid:** bootstrap from the x-web shell, indices from its sign.o chunk ([45a6280](https://github.com/gabros20/x-relay/commit/45a62808197bbc6194572739edbe9c1e76042098))
+
 ## [1.5.6](https://github.com/gabros20/x-relay/compare/v1.5.5...v1.5.6) (2026-09-25)
 
 
