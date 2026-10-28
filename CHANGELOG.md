@@ -1,3 +1,12 @@
+# [1.6.0](https://github.com/gabros20/x-relay/compare/v1.5.7...v1.6.0) (2026-10-28)
+
+
+### Features
+
+* **archive:** repair --media backfills video/GIF posters and durations ([5ee1373](https://github.com/gabros20/x-relay/commit/5ee1373ba8e183fd5a06033764475e0f46a2c6f1))
+* **engine:** cookie-less syndication tweet fetch ([2228b1d](https://github.com/gabros20/x-relay/commit/2228b1d570138b5edc0c40127a551bddea9792f5))
+* **mcp:** archive-repair tool for poster/duration backfill ([11cb3f7](https://github.com/gabros20/x-relay/commit/11cb3f7da637b6c89d6a88a99bb973cbb15e171f))
+
 ## [1.5.7](https://github.com/gabros20/x-relay/compare/v1.5.6...v1.5.7) (2026-09-25)
 
 
