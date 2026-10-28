@@ -66,3 +66,12 @@ export {
   type DedupeOpts,
   type DedupeResult,
 } from './batch.ts';
+export {
+  runArchiveRepair,
+  fillMedia,
+  isRepairCandidate,
+  mediaKey,
+  type RepairOpts,
+  type RepairDeps,
+  type RepairResult,
+} from './repair.ts';

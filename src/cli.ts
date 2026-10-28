@@ -8,8 +8,10 @@ import {
   type BatchOpts,
   type CacheViewOpts,
   type DedupeOpts,
+  type RepairOpts,
   type SearchCommandOpts,
   runArchive,
+  runArchiveRepair,
   runArticle,
   runBatch,
   runBookmarkAdd,
@@ -81,6 +83,7 @@ const VALUE_FLAGS = new Set([
   'fields',
   'file',
   'delay',
+  'concurrency',
 ]);
 const BOOL_FLAGS = new Set([
   'replies',
@@ -95,6 +98,8 @@ const BOOL_FLAGS = new Set([
   'compact',
   'offline',
   'quiet',
+  'media',
+  'dry-run',
 ]);
 /** Single-dash aliases. */
 const SHORT_FLAGS: Record<string, string> = { q: 'query', i: 'image' };
@@ -214,6 +219,35 @@ function buildArchiveOpts(parsed: ParsedArgs): ArchiveCommandOpts {
     // feed-target field
     ...(following ? { following: true } : {}),
   };
+}
+
+/** `archive repair <file> --media [--dry-run] [--out f] [--concurrency N] [--limit N] [--quiet]`. */
+export function buildRepairOpts(parsed: ParsedArgs): RepairOpts {
+  const concurrency = num(parsed, 'concurrency');
+  const limit = num(parsed, 'limit');
+  return {
+    file: parsed.positionals[1] ?? '',
+    ...(parsed.bools.has('media') ? { media: true } : {}),
+    ...(parsed.bools.has('dry-run') ? { dryRun: true } : {}),
+    ...(concurrency !== undefined ? { concurrency } : {}),
+    ...(limit !== undefined ? { limit } : {}),
+    ...(first(parsed, 'out') ? { out: first(parsed, 'out') } : {}),
+    ...(parsed.bools.has('quiet') ? { quiet: true } : {}),
+  };
+}
+
+/**
+ * Commands that never talk to X's authenticated API. run() skips building the
+ * Engine for them, because createEngine resolves cookies eagerly (Keychain /
+ * env) — a cookie-less command must work with no X login at all.
+ */
+export function isCookieless(parsed: ParsedArgs): boolean {
+  return parsed.command === 'archive' && parsed.positionals[0] === 'repair';
+}
+
+/** Dispatch a cookie-less command (see isCookieless). */
+function dispatchCookieless(parsed: ParsedArgs): Promise<Envelope<unknown>> {
+  return runArchiveRepair(buildRepairOpts(parsed));
 }
 
 function buildCacheOpts(parsed: ParsedArgs): CacheViewOpts {
@@ -443,6 +477,9 @@ function dispatchSearch(parsed: ParsedArgs, engine: Engine): Promise<Envelope<un
 
 /** Dispatch parsed args against an engine. Returns an envelope (does not print). */
 export async function dispatch(parsed: ParsedArgs, engine: Engine): Promise<Envelope<unknown>> {
+  // `archive repair` edits an existing file from the public syndication endpoint
+  // — it never needs the Engine (or cookies).
+  if (isCookieless(parsed)) return dispatchCookieless(parsed);
   const { command } = parsed;
   const target = parsed.positionals[0] ?? '';
 
@@ -522,8 +559,9 @@ export async function run(argv: string[], engine?: Engine): Promise<number> {
     );
     return 2;
   }
-  const eng = engine ?? createEngine({});
-  const envelope = await dispatch(parsed, eng);
+  const envelope = isCookieless(parsed)
+    ? await dispatchCookieless(parsed)
+    : await dispatch(parsed, engine ?? createEngine({}));
   process.stdout.write(`${toJson(envelope)}\n`);
   return envelope.ok ? 0 : 1;
 }

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { dispatch, parseArgs } from '../src/cli.ts';
+import { buildRepairOpts, dispatch, isCookieless, parseArgs } from '../src/cli.ts';
 import type { Engine } from '../src/engine/index.ts';
 import type {
   Article,
@@ -508,5 +508,83 @@ describe('parseArgs --image / -i', () => {
   test('mixed --image and -i are merged into one array', () => {
     const p = parseArgs(['post', 'hello', '--image', '/a.jpg', '-i', '/b.png']);
     expect(p.flags.image).toEqual(['/a.jpg', '/b.png']);
+  });
+});
+
+describe('archive repair', () => {
+  const archiveWith = (media: unknown[]) =>
+    JSON.stringify({
+      schema: 'x-relay/archive@1',
+      source: 'bookmarks',
+      generatedAt: '2026-01-01T00:00:00.000Z',
+      count: 1,
+      tweets: [
+        {
+          id: '1',
+          url: 'https://x.com/i/status/1',
+          text: 't',
+          author: { id: '1', handle: 'h', name: 'N', verified: false },
+          metrics: {},
+          media,
+        },
+      ],
+    });
+
+  test('parses the file positional, --media, --dry-run, --concurrency, --limit and --out', () => {
+    const p = parseArgs([
+      'archive',
+      'repair',
+      'a.json',
+      '--media',
+      '--dry-run',
+      '--concurrency',
+      '2',
+      '--limit',
+      '50',
+      '--out',
+      'b.json',
+    ]);
+    expect(buildRepairOpts(p)).toEqual({
+      file: 'a.json',
+      media: true,
+      dryRun: true,
+      concurrency: 2,
+      limit: 50,
+      out: 'b.json',
+    });
+  });
+
+  test('is cookie-less: run() must not build an engine for it', () => {
+    expect(isCookieless(parseArgs(['archive', 'repair', 'a.json', '--media']))).toBe(true);
+    expect(isCookieless(parseArgs(['archive', 'bookmarks', '--out', 'a.json']))).toBe(false);
+    expect(isCookieless(parseArgs(['search', 'repair']))).toBe(false);
+  });
+
+  test('dispatches to the repair runner without touching the engine', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'xrelay-cli-repair-'));
+    try {
+      const path = join(dir, 'a.json');
+      // Already repaired → zero candidates → no network.
+      writeFileSync(
+        path,
+        archiveWith([
+          { type: 'gif', url: 'https://video.twimg.com/tweet_video/G.mp4', thumbnail: 'p' },
+        ]),
+      );
+      const calls: string[] = [];
+      const env = await dispatch(
+        parseArgs(['archive', 'repair', path, '--media', '--quiet']),
+        fakeEngine(calls),
+      );
+      expect(env.ok).toBe(true);
+      expect(env.command).toBe('archive');
+      expect(env.ok && (env.data as { candidates: number }).candidates).toBe(0);
+      expect(calls).toHaveLength(0);
+
+      const noKind = await dispatch(parseArgs(['archive', 'repair', path]), fakeEngine(calls));
+      expect(!noKind.ok && noKind.error.code).toBe('INVALID_INPUT');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
