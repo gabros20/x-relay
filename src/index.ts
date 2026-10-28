@@ -12,6 +12,14 @@ export {
   type PageOpts,
 } from './engine/index.ts';
 export { parseCookies, type Cookies } from './engine/auth.ts';
+export {
+  fetchSyndicationTweet,
+  syndicationToken,
+  type SyndicationResult,
+  type SyndicationTweet,
+  type SyndicationMedia,
+  type SyndicationOpts,
+} from './engine/syndication.ts';
 export { getCookies, extractCookies } from './engine/cookies.ts';
 export {
   COMMANDS,
@@ -34,6 +42,9 @@ export {
   runArticle,
   runMedia,
   runDoctor,
+  runArchiveRepair,
+  type RepairOpts,
+  type RepairResult,
   type DoctorOpts,
   type DoctorReport,
   type DoctorCheck,

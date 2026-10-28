@@ -165,11 +165,14 @@ export const COMMANDS: CommandDef[] = [
       '       xrelay archive list <list-id> [--out <file.json>] [--limit N] [--full] [--prune] [--stdout] [--since YYYY-MM-DD]\n' +
       '       xrelay archive likes [<handle>] [--out <file.json>] [--limit N] [--full] [--prune] [--stdout] [--since YYYY-MM-DD]\n' +
       '       xrelay archive feed [--following] [--out <file.json>] [--limit N] [--stdout] [--since YYYY-MM-DD]\n' +
+      '       xrelay archive repair <file.json> --media [--dry-run] [--out <file.json>] [--concurrency N] [--limit N] [--quiet]\n' +
       '       Note: --since YYYY-MM-DD is a client-side post-filter (keeps tweets >= 00:00:00 UTC on that date).\n' +
       '             For search, --since also folds into the server-side query operator.\n' +
       '             For likes, omitting <handle> archives YOUR likes (own-likes only since June 2024).\n' +
       '             For feed, --following uses the chronological following timeline; default is the algorithmic for-you feed.\n' +
-      '             For bookmarks --folder, archives tweets from a specific bookmark folder.',
+      '             For bookmarks --folder, archives tweets from a specific bookmark folder.\n' +
+      '             repair --media backfills missing video/GIF posters + video durations in an existing\n' +
+      '             archive from the public syndication endpoint (no cookies); never overwrites, idempotent.',
   },
   {
     name: 'batch',

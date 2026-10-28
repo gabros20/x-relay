@@ -218,6 +218,7 @@ xrelay archive bookmarks [--out <file.json>] [--limit N] [--full] [--prune] [--s
        xrelay archive list <list-id> [--out <file.json>] [--limit N] [--full] [--prune] [--stdout] [--since YYYY-MM-DD]
        xrelay archive likes [<handle>] [--out <file.json>] [--limit N] [--full] [--prune] [--stdout] [--since YYYY-MM-DD]
        xrelay archive feed [--following] [--out <file.json>] [--limit N] [--stdout] [--since YYYY-MM-DD]
+       xrelay archive repair <file.json> --media [--dry-run] [--out <file.json>] [--concurrency N] [--limit N] [--quiet]
 ```
 - **bookmarks** (default): captures full-fidelity bookmark set (rich media, article markdown, quoted tweets,
   retweet unwrap, ISO timestamps) into `{ schema, source, generatedAt, count, newestId, tweets:[ArchiveTweet] }`.
@@ -233,6 +234,29 @@ xrelay archive bookmarks [--out <file.json>] [--limit N] [--full] [--prune] [--s
 - **feed `[--following]`**: archives your home feed (for-you) or `--following` (chronological). No
   membership-stop (feed ordering is not id-monotonic); `--since` post-filters client-side.
 - Returns `{ source, out?, added, total, newestId }`.
+
+#### `archive repair <file> --media` — COST: 1 public request per post with missing media; no cookies.
+```
+xrelay archive repair corpus.json --media --dry-run          # report what would be filled
+xrelay archive repair corpus.json --media                    # fill in place (atomic write)
+xrelay archive repair corpus.json --media --out fixed.json   # write a repaired copy instead
+```
+- Backfills **missing** video/GIF posters (`thumbnail`) and video `durationMs` on an EXISTING archive. Use it
+  on archives imported from older tools (they carry no posters) — incremental `archive` runs never revisit
+  tweets already in the file, so those items otherwise stay posterless. Fresh captures already get both.
+- Source: X's public embed endpoint (`cdn.syndication.twimg.com`) — **no cookies, no login, no account
+  risk**; it works even when `doctor` reports no session. Posters are matched to items by media id
+  (`amplify_video` / `ext_tw_video` / `tweet_video`), including quoted tweets' media.
+- **Never overwrites** an existing value and is **idempotent** — re-run it freely; a second run only retries
+  what is still missing. Everything else in the file (tweet order, `schema`, `newestId`, `generatedAt`,
+  formatting) is preserved, and the write is atomic (temp file + rename). `--dry-run` writes nothing.
+- `--concurrency N` (default 4, max 16) bounds parallel requests; 429/5xx are retried with backoff
+  (honoring `Retry-After`). `--limit N` caps the posts fetched this run (the rest count as `skipped`).
+- Returns `{ file, kind:"media", dryRun, posts, probed, candidates, filled, unresolved, failed, skipped,
+  thumbnails, durations, out? }` — counts are media items (`posts`/`probed` are posts). `unresolved` = the
+  post is deleted/protected or X returned no matching media (expected for a few percent of old posts);
+  `failed` = the fetch errored after retries (re-run to retry). `out` is present only when a file was written.
+- Over MCP: the `archive-repair` tool (`{ file, dryRun?, out?, concurrency?, limit? }`; `media` defaults on).
 
 ### `batch` — COST: N calls, serialized. Many searches → one deduped archive.
 ```
