@@ -9,8 +9,10 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import {
   type ArchiveCommandOpts,
+  type RepairOpts,
   type SearchCommandOpts,
   runArchive,
+  runArchiveRepair,
   runArticle,
   runBatch,
   runBookmarks,
@@ -108,6 +110,23 @@ export function buildMcpArchiveOpts(args: Record<string, unknown>): ArchiveComma
     ...(args.product ? { product: args.product as SearchProduct } : {}),
     ...(args.following ? { following: true } : {}),
     ...(args.folderId ? { folderId: String(args.folderId) } : {}),
+  };
+}
+
+/**
+ * Map the MCP archive-repair tool args to RepairOpts. `media` defaults to true —
+ * it is the only repair kind, so an agent needn't restate it — and progress is
+ * always silenced (stderr chatter has no place on the stdio transport).
+ */
+export function buildMcpRepairOpts(args: Record<string, unknown>): RepairOpts {
+  return {
+    file: String(args.file ?? ''),
+    ...(args.media !== false ? { media: true } : {}),
+    ...(args.dryRun ? { dryRun: true } : {}),
+    ...(args.out ? { out: String(args.out) } : {}),
+    ...(args.concurrency !== undefined ? { concurrency: Number(args.concurrency) } : {}),
+    ...(args.limit !== undefined ? { limit: Number(args.limit) } : {}),
+    quiet: true,
   };
 }
 
@@ -459,6 +478,37 @@ function buildServer(): McpServer {
       },
     },
     async (args) => wrap(await runArchive(getEngine(), buildMcpArchiveOpts(args))),
+  );
+
+  server.registerTool(
+    'archive-repair',
+    {
+      description:
+        "Repair an EXISTING archive file in place: fill missing video/GIF posters (`thumbnail`) and video `durationMs` from X's public, cookie-less syndication endpoint (no login, no account risk). Use it on archives imported from older tools, or captured before posters were recorded — incremental `archive` runs never revisit known tweets, so they stay posterless otherwise. Only absent fields are filled (never overwritten) and it is idempotent; the rest of the file is preserved and the write is atomic. Returns {candidates, filled, unresolved, failed, skipped, out}: `unresolved` = the post is deleted/protected or has no matching media, `failed` = the fetch errored after retries (re-run to retry). dryRun=true reports without writing.",
+      inputSchema: {
+        file: z.string().describe('path to an x-relay archive JSON file'),
+        media: z
+          .boolean()
+          .describe('repair video/GIF posters + video durations (default true; the only kind)')
+          .optional(),
+        dryRun: z.boolean().describe('fetch and report, but write nothing').optional(),
+        out: z.string().describe('write the repaired archive here instead of in place').optional(),
+        concurrency: z
+          .number()
+          .int()
+          .min(1)
+          .max(16)
+          .describe('parallel requests (default 4)')
+          .optional(),
+        limit: z
+          .number()
+          .int()
+          .positive()
+          .describe('max posts to fetch this run; the rest are reported as skipped')
+          .optional(),
+      },
+    },
+    async (args) => wrap(await runArchiveRepair(buildMcpRepairOpts(args))),
   );
 
   server.registerTool(

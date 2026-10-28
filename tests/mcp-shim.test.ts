@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { buildMcpArchiveOpts } from '../src/mcp-shim.ts';
+import { buildMcpArchiveOpts, buildMcpRepairOpts } from '../src/mcp-shim.ts';
 
 // The MCP archive tool is read-only and never streams the archive back, so the
 // arg→opts mapping must always carry `out` (required) and never set `stdout`.
@@ -62,5 +62,38 @@ describe('buildMcpArchiveOpts', () => {
     expect(opts.listId).toBeUndefined();
     expect(opts.limit).toBeUndefined();
     expect(opts.following).toBeUndefined();
+  });
+});
+
+// The MCP archive-repair tool maps onto runArchiveRepair. `media` defaults on (it is
+// the only repair kind), progress is always silenced (stdio transport), and absent
+// optionals don't leak through as undefined keys.
+describe('buildMcpRepairOpts', () => {
+  test('defaults media on and forces quiet', () => {
+    expect(buildMcpRepairOpts({ file: '/tmp/a.json' })).toEqual({
+      file: '/tmp/a.json',
+      media: true,
+      quiet: true,
+    });
+  });
+
+  test('forwards dryRun / out / concurrency / limit and an explicit media=false', () => {
+    expect(
+      buildMcpRepairOpts({
+        file: '/tmp/a.json',
+        media: false,
+        dryRun: true,
+        out: '/tmp/b.json',
+        concurrency: 2,
+        limit: 10,
+      }),
+    ).toEqual({
+      file: '/tmp/a.json',
+      dryRun: true,
+      out: '/tmp/b.json',
+      concurrency: 2,
+      limit: 10,
+      quiet: true,
+    });
   });
 });
