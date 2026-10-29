@@ -61,6 +61,8 @@ export type Tweet = {
   urls?: string[];
   media?: MediaKind[];
   isReply?: boolean;
+  /** The post this one answers (`in_reply_to_status_id_str`) — set only when isReply. */
+  inReplyToId?: string;
   isRetweet?: boolean;
   isQuote?: boolean;
   /** @handle of the retweeter — set only when isRetweet is true (rich path). */

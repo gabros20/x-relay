@@ -293,7 +293,11 @@ function applyTweetRelations(
   legacy: Record<string, unknown> | undefined,
   opts: { rich?: boolean; depth: number },
 ): void {
-  if (dualString(result, legacy, 'in_reply_to_status_id_str') !== undefined) tweet.isReply = true;
+  const inReplyToId = dualString(result, legacy, 'in_reply_to_status_id_str');
+  if (inReplyToId !== undefined) {
+    tweet.isReply = true;
+    tweet.inReplyToId = inReplyToId;
+  }
 
   const quoteId = dualString(result, legacy, 'quoted_status_id_str');
   const quotedNode =
@@ -427,12 +431,19 @@ function locateInstructions(json: unknown): unknown[] {
   return Array.isArray(found) ? found : [];
 }
 
-/** Flatten every instruction's `entries` into one ordered list. */
+/**
+ * Flatten every instruction's `entries` into one ordered list. A `TimelineAddToModule`
+ * instruction (the answer to an in-module ShowMore cursor, e.g. the rest of a long
+ * self-thread) carries `moduleItems` instead; each item joins the list as an entry.
+ */
 function collectEntries(instructions: unknown[]): Record<string, unknown>[] {
   const entries: Record<string, unknown>[] = [];
   for (const instruction of instructions) {
-    if (isRecord(instruction) && Array.isArray(instruction.entries)) {
-      for (const entry of instruction.entries) {
+    if (!isRecord(instruction)) continue;
+    for (const key of ['entries', 'moduleItems'] as const) {
+      const list = instruction[key];
+      if (!Array.isArray(list)) continue;
+      for (const entry of list) {
         if (isRecord(entry)) entries.push(entry);
       }
     }
@@ -535,4 +546,101 @@ export function parseThread(json: unknown, focalTweetId: string): ThreadResult {
   };
   if (page.nextCursor !== undefined) result.nextCursor = page.nextCursor;
   return result;
+}
+
+// ── self-threads ────────────────────────────────────────────────────────────
+
+/** One TweetDetail page read for the author's own thread (see extractSelfThread). */
+export type SelfThreadPage = {
+  /** Every tweet on the page (root, the author's thread, everyone's replies), de-duped. */
+  tweets: Tweet[];
+  /** Ids X labels `tweetDisplayType: "SelfThread"` — the author's continuation. */
+  selfThreadIds: Set<string>;
+  /** In-module ShowMore cursor of the self-thread module: the thread continues past it. */
+  moreCursor?: string;
+};
+
+/** Item containers on a TweetDetail page: [moduleId, itemContent[]] for modules and single items. */
+function itemGroups(instructions: unknown[]): Array<Record<string, unknown>[]> {
+  const groups: Array<Record<string, unknown>[]> = [];
+  const contentOf = (item: unknown) => {
+    const inner = isRecord(item) ? child(item, 'item') : undefined;
+    return inner ? child(inner, 'itemContent') : undefined;
+  };
+  for (const instruction of instructions) {
+    if (!isRecord(instruction)) continue;
+    if (Array.isArray(instruction.moduleItems)) {
+      groups.push(instruction.moduleItems.map(contentOf).filter(isRecord));
+    }
+    if (!Array.isArray(instruction.entries)) continue;
+    for (const entry of instruction.entries) {
+      const content = isRecord(entry) ? child(entry, 'content') : undefined;
+      if (!content) continue;
+      if (Array.isArray(content.items)) groups.push(content.items.map(contentOf).filter(isRecord));
+      else {
+        const single = child(content, 'itemContent');
+        if (single) groups.push([single]);
+      }
+    }
+  }
+  return groups;
+}
+
+/**
+ * Parse ONE TweetDetail page for the author's thread: all tweets (rich when asked),
+ * the ids X labels SelfThread, and the ShowMore cursor of the module holding them
+ * (other conversations' ShowMore cursors are ignored — those are someone else's replies).
+ */
+export function parseSelfThreadPage(json: unknown, opts?: { rich?: boolean }): SelfThreadPage {
+  const { tweets } = parseTimeline(json, opts);
+  const selfThreadIds = new Set<string>();
+  let moreCursor: string | undefined;
+  for (const group of itemGroups(locateInstructions(json))) {
+    let isSelfModule = false;
+    let cursor: string | undefined;
+    for (const content of group) {
+      if (content.tweetDisplayType === 'SelfThread') {
+        const node = child(content, 'tweet_results');
+        const parsed = node ? parseTweetResult(node.result) : null;
+        if (parsed) {
+          selfThreadIds.add(parsed.id);
+          isSelfModule = true;
+        }
+      } else if (content.cursorType === 'ShowMore') {
+        cursor = asString(content.value);
+      }
+    }
+    if (isSelfModule && cursor !== undefined) moreCursor = cursor;
+  }
+  const page: SelfThreadPage = { tweets, selfThreadIds };
+  if (moreCursor !== undefined) page.moreCursor = moreCursor;
+  return page;
+}
+
+/**
+ * The author's own thread under `root`, oldest first: posts by the root's author
+ * that answer the root or another post already in the chain. The author's replies to
+ * OTHER people (very common under a launch post) answer a non-chain id and are left
+ * out. X's SelfThread label is only a fallback for a post whose reply id is missing.
+ */
+export function extractSelfThread(root: Tweet, candidates: Tweet[], selfThreadIds: Set<string>): Tweet[] {
+  if (!root.author.id) return [];
+  const pool = new Map<string, Tweet>();
+  for (const t of candidates) {
+    if (t.id !== root.id && t.author.id === root.author.id && !pool.has(t.id)) pool.set(t.id, t);
+  }
+  const chain = new Set<string>([root.id]);
+  const thread: Tweet[] = [];
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const t of pool.values()) {
+      if (chain.has(t.id)) continue;
+      const linked = t.inReplyToId !== undefined ? chain.has(t.inReplyToId) : selfThreadIds.has(t.id);
+      if (!linked) continue;
+      chain.add(t.id);
+      thread.push(t);
+      grew = true;
+    }
+  }
+  return thread.sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
 }
