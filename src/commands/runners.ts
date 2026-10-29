@@ -25,6 +25,7 @@ import {
 } from '../format.ts';
 import { extractTweetId, looksLikeTweetRef } from '../ids.ts';
 import { err, ok } from '../output.ts';
+import { progressReporter } from '../progress.ts';
 import { parseTwitterDateMs } from '../time.ts';
 import type {
   ArchiveFile,
@@ -33,12 +34,19 @@ import type {
   Envelope,
   MediaItem,
   SearchResult,
+  SelfThreadResult,
   ThreadResult,
   Tweet,
   TweetPage,
   UserProfile,
 } from '../types.ts';
 import { type SearchQueryFlags, buildSearchQuery } from './query.ts';
+import {
+  type CaptureResult,
+  captureThreads,
+  needsThreadCheck,
+  threadCheckOrder,
+} from './threads.ts';
 
 /** Run an engine call, mapping EngineError (and anything else) to an error envelope. */
 async function guard<T>(command: string, fn: () => Promise<T>): Promise<Envelope<T>> {
@@ -263,9 +271,12 @@ export function runThread(
   engine: Engine,
   input: string,
   limit?: number,
-): Promise<Envelope<ThreadResult>> {
+  self?: boolean,
+): Promise<Envelope<ThreadResult | SelfThreadResult>> {
   const resolved = resolveTweetIdOrErr('thread', input);
   if (typeof resolved !== 'string') return Promise.resolve(resolved);
+  // --self: only the author's own continuation (their reply chain), not the conversation.
+  if (self) return guard('thread', () => engine.selfThread(resolved));
   return guard('thread', () => engine.thread(resolved, lim(limit)));
 }
 
@@ -539,6 +550,12 @@ export interface ArchiveCommandOpts extends Partial<SearchQueryFlags> {
   folderId?: string;
   /** For feed target: when true, fetch the following (chronological) timeline. */
   following?: boolean;
+  /** Also look up the author's thread (continuation) of each newly added post. */
+  threads?: boolean;
+  /** Pause between thread lookups (default DEFAULT_THREAD_DELAY_MS). */
+  threadDelayMs?: number;
+  /** Silence stderr progress. */
+  quiet?: boolean;
 }
 
 export interface ArchiveResult {
@@ -553,7 +570,15 @@ export interface ArchiveResult {
   total: number;
   /** Max tweet id in the resulting archive. */
   newestId?: string;
+  /** With --threads: the thread lookups for this run's new posts. */
+  threads?: CaptureResult & {
+    /** New posts still waiting for a lookup (over the per-run cap, or the run stopped). */
+    pending: number;
+  };
 }
+
+/** Thread lookups per `archive --threads` run; the rest wait for `archive repair --threads`. */
+const NEW_POST_THREAD_LIMIT = 100;
 
 /**
  * The provenance + behavior a specific archive target supplies to runArchiveCore.
@@ -581,7 +606,11 @@ interface ArchiveSpec {
  * build the ArchiveResult envelope payload. Targets supply only their fetch
  * closure + provenance via ArchiveSpec, so T2–T6 become one-liners.
  */
-async function runArchiveCore(opts: ArchiveCommandOpts, spec: ArchiveSpec): Promise<ArchiveResult> {
+async function runArchiveCore(
+  opts: ArchiveCommandOpts,
+  engine: Engine,
+  spec: ArchiveSpec,
+): Promise<ArchiveResult> {
   const outPath = opts.out;
 
   // Load existing archive to derive knownIds for the incremental membership stop.
@@ -615,6 +644,24 @@ async function runArchiveCore(opts: ArchiveCommandOpts, spec: ArchiveSpec): Prom
   file.source = spec.source;
   spec.patchFile?.(file);
 
+  // --threads: the author's continuation of each NEW post (one lookup each, gentle,
+  // capped). A failure here never fails the pull — unchecked posts stay unstamped and
+  // `archive repair --threads` picks them up later.
+  let threads: ArchiveResult['threads'];
+  if (opts.threads) {
+    const nowMs = Date.now();
+    const before = new Set((existing?.tweets ?? []).map((t) => t.id));
+    const targets = threadCheckOrder(
+      file.tweets.filter((t) => !before.has(t.id) && needsThreadCheck(t, nowMs)),
+    );
+    const res = await captureThreads(engine, targets, {
+      limit: NEW_POST_THREAD_LIMIT,
+      ...(opts.threadDelayMs !== undefined ? { delayMs: opts.threadDelayMs } : {}),
+      progress: progressReporter(opts.quiet ?? false),
+    });
+    threads = { ...res, pending: targets.length - res.checked };
+  }
+
   if (opts.stdout) {
     process.stdout.write(JSON.stringify(file, null, 2));
   } else if (outPath) {
@@ -628,6 +675,7 @@ async function runArchiveCore(opts: ArchiveCommandOpts, spec: ArchiveSpec): Prom
     added,
     total: file.count,
     ...(file.newestId !== undefined ? { newestId: file.newestId } : {}),
+    ...(threads !== undefined ? { threads } : {}),
   };
 }
 
@@ -647,7 +695,7 @@ function archiveFetchOpts(
 function runArchiveBookmarks(engine: Engine, opts: ArchiveCommandOpts): Promise<ArchiveResult> {
   const folderId = opts.folderId;
   if (folderId) {
-    return runArchiveCore(opts, {
+    return runArchiveCore(opts, engine, {
       source: 'bookmarks',
       patchFile: (file) => {
         file.folderId = folderId;
@@ -655,7 +703,7 @@ function runArchiveBookmarks(engine: Engine, opts: ArchiveCommandOpts): Promise<
       fetch: (knownIds) => engine.archiveBookmarkFolder(folderId, archiveFetchOpts(opts, knownIds)),
     });
   }
-  return runArchiveCore(opts, {
+  return runArchiveCore(opts, engine, {
     source: 'bookmarks',
     fetch: (knownIds) => engine.archiveBookmarks(archiveFetchOpts(opts, knownIds)),
   });
@@ -665,7 +713,7 @@ function runArchiveBookmarks(engine: Engine, opts: ArchiveCommandOpts): Promise<
 function runArchiveUser(engine: Engine, opts: ArchiveCommandOpts): Promise<ArchiveResult> {
   const handle = opts.handle;
   if (!handle) throw new EngineError('INVALID_INPUT', 'archive user requires a handle');
-  return runArchiveCore(opts, {
+  return runArchiveCore(opts, engine, {
     source: 'user',
     handle,
     patchFile: (file) => {
@@ -684,7 +732,7 @@ async function runArchiveMyPosts(engine: Engine, opts: ArchiveCommandOpts): Prom
   // Resolve self handle for provenance; me() is memoized so this adds no extra
   // network call beyond the one archiveMyPosts already makes.
   const handle = (await engine.me()) ?? undefined;
-  return runArchiveCore(opts, {
+  return runArchiveCore(opts, engine, {
     source: 'my-posts',
     ...(handle !== undefined ? { handle } : {}),
     ...(handle !== undefined
@@ -706,7 +754,7 @@ async function runArchiveMyPosts(engine: Engine, opts: ArchiveCommandOpts): Prom
 async function runArchiveLikes(engine: Engine, opts: ArchiveCommandOpts): Promise<ArchiveResult> {
   const handle = opts.handle ?? (await engine.me()) ?? undefined;
   if (!handle) throw new EngineError('INVALID_INPUT', 'could not determine handle — pass a handle');
-  return runArchiveCore(opts, {
+  return runArchiveCore(opts, engine, {
     source: 'likes',
     handle,
     patchFile: (file) => {
@@ -742,7 +790,7 @@ export function runArchive(
       if (!rawQuery)
         return Promise.resolve(err('archive', 'INVALID_INPUT', 'archive search requires a query'));
       return guard('archive', () =>
-        runArchiveCore(opts, {
+        runArchiveCore(opts, engine, {
           source: 'search',
           patchFile: (file) => {
             file.query = rawQuery;
@@ -761,7 +809,7 @@ export function runArchive(
       if (!listId)
         return Promise.resolve(err('archive', 'INVALID_INPUT', 'archive list requires a list id'));
       return guard('archive', () =>
-        runArchiveCore(opts, {
+        runArchiveCore(opts, engine, {
           source: 'list',
           patchFile: (file) => {
             file.listId = listId;
@@ -776,7 +824,7 @@ export function runArchive(
 
     case 'feed':
       return guard('archive', () =>
-        runArchiveCore(opts, {
+        runArchiveCore(opts, engine, {
           source: 'feed',
           fetch: (_knownIds) =>
             engine.archiveFeed({

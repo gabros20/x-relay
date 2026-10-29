@@ -41,6 +41,7 @@ import {
   runSearch,
   runSync,
   runThread,
+  runThreadRepair,
   runTrends,
   runUnbookmark,
   runUnfollow,
@@ -100,6 +101,8 @@ const BOOL_FLAGS = new Set([
   'quiet',
   'media',
   'dry-run',
+  'threads',
+  'self',
 ]);
 /** Single-dash aliases. */
 const SHORT_FLAGS: Record<string, string> = { q: 'query', i: 'image' };
@@ -185,7 +188,7 @@ function parseSearchFlags(
   };
 }
 
-function buildArchiveOpts(parsed: ParsedArgs): ArchiveCommandOpts {
+export function buildArchiveOpts(parsed: ParsedArgs): ArchiveCommandOpts {
   const target = parsed.positionals[0] ?? '';
   // For `archive user <handle>`, positionals[1] is the handle.
   // For `archive likes [<handle>]`, positionals[1] is the optional handle.
@@ -218,16 +221,30 @@ function buildArchiveOpts(parsed: ParsedArgs): ArchiveCommandOpts {
     ...(first(parsed, 'folder') ? { folderId: first(parsed, 'folder') } : {}),
     // feed-target field
     ...(following ? { following: true } : {}),
+    ...archiveThreadFlags(parsed),
   };
 }
 
-/** `archive repair <file> --media [--dry-run] [--out f] [--concurrency N] [--limit N] [--quiet]`. */
+/** `--threads [--delay ms] [--quiet]`: look up the author's thread of each new post. */
+function archiveThreadFlags(parsed: ParsedArgs): Partial<ArchiveCommandOpts> {
+  const delay = num(parsed, 'delay');
+  return {
+    ...(parsed.bools.has('threads') ? { threads: true } : {}),
+    ...(delay !== undefined ? { threadDelayMs: delay } : {}),
+    ...(parsed.bools.has('quiet') ? { quiet: true } : {}),
+  };
+}
+
+/** `archive repair <file> (--media|--threads) [--dry-run] [--out f] [--concurrency N] [--limit N] [--delay ms] [--quiet]`. */
 export function buildRepairOpts(parsed: ParsedArgs): RepairOpts {
   const concurrency = num(parsed, 'concurrency');
   const limit = num(parsed, 'limit');
+  const delay = num(parsed, 'delay');
   return {
     file: parsed.positionals[1] ?? '',
     ...(parsed.bools.has('media') ? { media: true } : {}),
+    ...(parsed.bools.has('threads') ? { threads: true } : {}),
+    ...(delay !== undefined ? { delay } : {}),
     ...(parsed.bools.has('dry-run') ? { dryRun: true } : {}),
     ...(concurrency !== undefined ? { concurrency } : {}),
     ...(limit !== undefined ? { limit } : {}),
@@ -242,7 +259,12 @@ export function buildRepairOpts(parsed: ParsedArgs): RepairOpts {
  * env) — a cookie-less command must work with no X login at all.
  */
 export function isCookieless(parsed: ParsedArgs): boolean {
-  return parsed.command === 'archive' && parsed.positionals[0] === 'repair';
+  // repair --threads reads TweetDetail, which needs the logged-in engine.
+  return (
+    parsed.command === 'archive' &&
+    parsed.positionals[0] === 'repair' &&
+    !parsed.bools.has('threads')
+  );
 }
 
 /** Dispatch a cookie-less command (see isCookieless). */
@@ -475,6 +497,12 @@ function dispatchSearch(parsed: ParsedArgs, engine: Engine): Promise<Envelope<un
   return runSearch(engine, buildSearchOpts(parsed));
 }
 
+/** `archive …` with an engine; cookie-less `repair --media` never gets here (isCookieless). */
+function dispatchArchive(parsed: ParsedArgs, engine: Engine): Promise<Envelope<unknown>> {
+  if (parsed.positionals[0] === 'repair') return runThreadRepair(engine, buildRepairOpts(parsed));
+  return runArchive(engine, buildArchiveOpts(parsed));
+}
+
 /** Dispatch parsed args against an engine. Returns an envelope (does not print). */
 export async function dispatch(parsed: ParsedArgs, engine: Engine): Promise<Envelope<unknown>> {
   // `archive repair` edits an existing file from the public syndication endpoint
@@ -495,7 +523,7 @@ export async function dispatch(parsed: ParsedArgs, engine: Engine): Promise<Enve
         ...(num(parsed, 'limit') !== undefined ? { limit: num(parsed, 'limit') } : {}),
       });
     case 'thread':
-      return runThread(engine, target, num(parsed, 'limit'));
+      return runThread(engine, target, num(parsed, 'limit'), parsed.bools.has('self'));
     case 'bookmarks': {
       // `bookmarks folders [<id>]` → bookmark folder list or folder timeline
       if (target === 'folders') {
@@ -528,7 +556,7 @@ export async function dispatch(parsed: ParsedArgs, engine: Engine): Promise<Enve
       });
     }
     case 'archive':
-      return runArchive(engine, buildArchiveOpts(parsed));
+      return dispatchArchive(parsed, engine);
     case 'batch':
       return runBatch(engine, buildBatchOpts(parsed));
     case 'dedupe':

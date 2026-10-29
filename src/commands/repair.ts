@@ -22,7 +22,13 @@ import {
 } from '../engine/syndication.ts';
 import { err, ok } from '../output.ts';
 import { type ProgressReporter, progressReporter } from '../progress.ts';
-import type { ArchiveFile, ArchiveTweet, Envelope, MediaItem } from '../types.ts';
+import type { ArchiveFile, ArchiveTweet, Envelope, MediaItem, SelfThreadResult } from '../types.ts';
+import {
+  type CaptureResult,
+  captureThreads,
+  needsThreadCheck,
+  threadCheckOrder,
+} from './threads.ts';
 
 const DEFAULT_CONCURRENCY = 4;
 const MAX_CONCURRENCY = 16;
@@ -31,8 +37,12 @@ const PROGRESS_EVERY = 100;
 export interface RepairOpts {
   /** The archive file to repair. */
   file: string;
-  /** Repair kind: video/GIF posters + video durations. Currently the only kind (required). */
+  /** Repair kind: video/GIF posters + video durations (public endpoint, no cookies). */
   media?: boolean;
+  /** Repair kind: look up the author's thread of posts not yet checked (logged-in session). */
+  threads?: boolean;
+  /** --threads: pause between lookups in ms (default 3000). */
+  delay?: number;
   /** Write the repaired archive here instead of in place. */
   out?: string;
   /** Fetch + match, report, but write nothing. */
@@ -279,9 +289,15 @@ async function forEachBounded<T>(
 
 function validate(opts: RepairOpts): string | null {
   if (!opts.file)
-    return 'archive repair requires a file: xrelay archive repair <file.json> --media';
-  if (!opts.media) {
-    return 'choose what to repair: --media (video/GIF posters + video durations)';
+    return 'archive repair requires a file: xrelay archive repair <file.json> --media|--threads';
+  if (opts.media && opts.threads) {
+    return '--media and --threads are separate runs (--media needs no login; --threads uses your X session)';
+  }
+  if (!opts.media && !opts.threads) {
+    return 'choose what to repair: --media (video/GIF posters + video durations) or --threads (author threads)';
+  }
+  if (opts.delay !== undefined && (!Number.isFinite(opts.delay) || opts.delay < 0)) {
+    return '--delay must be a non-negative number of milliseconds';
   }
   const c = opts.concurrency;
   if (c !== undefined && (!Number.isInteger(c) || c < 1 || c > MAX_CONCURRENCY)) {
@@ -370,6 +386,80 @@ export async function runArchiveRepair(
   const inPlace = resolve(out) === resolve(opts.file);
   if (!result.dryRun && (result.filled > 0 || !inPlace)) {
     writeFileAtomic(out, serializeLike(raw, file));
+    result.out = out;
+  }
+  return ok('archive', result);
+}
+
+// ─── archive repair --threads ────────────────────────────────────────────────
+// Backfill the author's thread of archived posts (commands/threads.ts). Unlike
+// --media this needs the logged-in engine: one TweetDetail call per post that has
+// replies and wasn't checked yet (plus one re-check of posts checked while young).
+// Resumable by design — every checked post is stamped, the file is saved every
+// CHECKPOINT_EVERY lookups and at the end (also when X rate-limits mid-run), so the
+// next run simply continues. Same file guarantees as --media: formatting kept,
+// atomic writes, --dry-run writes nothing.
+
+const CHECKPOINT_EVERY = 25;
+
+export interface ThreadRepairResult extends CaptureResult {
+  file: string;
+  kind: 'threads';
+  dryRun: boolean;
+  /** Posts that needed a lookup at the start of this run. */
+  candidates: number;
+  /** Candidates still waiting (over --limit, failed, or the run stopped early). */
+  remaining: number;
+  /** Path written (absent under --dry-run or when nothing was checked). */
+  out?: string;
+}
+
+export async function runThreadRepair(
+  engine: { selfThread(id: string): Promise<SelfThreadResult> },
+  opts: RepairOpts,
+  deps: Pick<RepairDeps, 'sleep' | 'progress'> & { now?: () => Date } = {},
+): Promise<Envelope<ThreadRepairResult>> {
+  const invalid = validate({ ...opts, threads: true });
+  if (invalid || !opts.threads)
+    return err('archive', 'INVALID_INPUT', invalid ?? 'missing --threads');
+  const loaded = loadForRepair(opts.file);
+  if ('error' in loaded) return err('archive', 'INVALID_INPUT', loaded.error);
+  const { raw, file } = loaded;
+
+  const progress = deps.progress ?? progressReporter(opts.quiet ?? false);
+  const nowMs = (deps.now?.() ?? new Date()).getTime();
+  const candidates = threadCheckOrder(file.tweets.filter((t) => needsThreadCheck(t, nowMs)));
+  const dryRun = opts.dryRun ?? false;
+  const out = opts.out ?? opts.file;
+  const save = () => {
+    if (!dryRun) writeFileAtomic(out, serializeLike(raw, file));
+  };
+
+  const planned =
+    opts.limit !== undefined ? Math.min(opts.limit, candidates.length) : candidates.length;
+  progress(`threads: ${candidates.length} post(s) to check; checking ${planned} this run`);
+  const res = await captureThreads(engine, candidates, {
+    ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
+    ...(opts.delay !== undefined ? { delayMs: opts.delay } : {}),
+    ...(deps.sleep ? { sleep: deps.sleep } : {}),
+    ...(deps.now ? { now: deps.now } : {}),
+    progress,
+    checkpointEvery: CHECKPOINT_EVERY,
+    onCheckpoint: save,
+  });
+  if (res.stopped) progress(`threads: stopped early (${res.stopped.code}) — the next run resumes`);
+
+  const result: ThreadRepairResult = {
+    file: opts.file,
+    kind: 'threads',
+    dryRun,
+    candidates: candidates.length,
+    remaining: candidates.length - res.checked,
+    ...res,
+  };
+  const inPlace = resolve(out) === resolve(opts.file);
+  if (!dryRun && (res.checked > 0 || !inPlace)) {
+    save();
     result.out = out;
   }
   return ok('archive', result);

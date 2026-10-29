@@ -68,6 +68,8 @@ export {
 } from './batch.ts';
 export {
   runArchiveRepair,
+  runThreadRepair,
+  type ThreadRepairResult,
   fillMedia,
   isRepairCandidate,
   mediaKey,
