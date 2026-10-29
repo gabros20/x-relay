@@ -623,7 +623,11 @@ export function parseSelfThreadPage(json: unknown, opts?: { rich?: boolean }): S
  * OTHER people (very common under a launch post) answer a non-chain id and are left
  * out. X's SelfThread label is only a fallback for a post whose reply id is missing.
  */
-export function extractSelfThread(root: Tweet, candidates: Tweet[], selfThreadIds: Set<string>): Tweet[] {
+export function extractSelfThread(
+  root: Tweet,
+  candidates: Tweet[],
+  selfThreadIds: Set<string>,
+): Tweet[] {
   if (!root.author.id) return [];
   const pool = new Map<string, Tweet>();
   for (const t of candidates) {
@@ -635,7 +639,8 @@ export function extractSelfThread(root: Tweet, candidates: Tweet[], selfThreadId
     grew = false;
     for (const t of pool.values()) {
       if (chain.has(t.id)) continue;
-      const linked = t.inReplyToId !== undefined ? chain.has(t.inReplyToId) : selfThreadIds.has(t.id);
+      const linked =
+        t.inReplyToId !== undefined ? chain.has(t.inReplyToId) : selfThreadIds.has(t.id);
       if (!linked) continue;
       chain.add(t.id);
       thread.push(t);

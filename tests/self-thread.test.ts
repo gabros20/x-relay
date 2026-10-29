@@ -1,11 +1,11 @@
 import { describe, expect, test } from 'bun:test';
+import { type EngineClient, createEngine } from '../src/engine/index.ts';
 import {
   extractSelfThread,
   parseSelfThreadPage,
   parseTimeline,
   parseTweetResult,
 } from '../src/engine/parse.ts';
-import { type EngineClient, createEngine } from '../src/engine/index.ts';
 import type { Tweet } from '../src/types.ts';
 
 // ── fixtures ────────────────────────────────────────────────────────────────
@@ -24,7 +24,11 @@ function tweetResult(id: string, user: { id: string; handle: string }, replyTo?:
     rest_id: id,
     core: {
       user_results: {
-        result: { __typename: 'User', rest_id: user.id, legacy: { screen_name: user.handle, name: user.handle } },
+        result: {
+          __typename: 'User',
+          rest_id: user.id,
+          legacy: { screen_name: user.handle, name: user.handle },
+        },
       },
     },
     legacy: {
@@ -38,7 +42,12 @@ function tweetResult(id: string, user: { id: string; handle: string }, replyTo?:
   };
 }
 
-type ItemSpec = { id: string; user: typeof AUTHOR; replyTo?: string; display?: 'SelfThread' | 'Tweet' };
+type ItemSpec = {
+  id: string;
+  user: typeof AUTHOR;
+  replyTo?: string;
+  display?: 'SelfThread' | 'Tweet';
+};
 
 function tweetItem(moduleId: string, spec: ItemSpec) {
   return {
@@ -79,7 +88,11 @@ function focalEntry(id: string) {
     entryId: `tweet-${id}`,
     content: {
       entryType: 'TimelineTimelineItem',
-      itemContent: { itemType: 'TimelineTweet', tweetDisplayType: 'Tweet', tweet_results: { result: tweetResult(id, AUTHOR) } },
+      itemContent: {
+        itemType: 'TimelineTweet',
+        tweetDisplayType: 'Tweet',
+        tweet_results: { result: tweetResult(id, AUTHOR) },
+      },
     },
   };
 }
@@ -88,7 +101,12 @@ function detail(instructions: unknown[]) {
   return { data: { threaded_conversation_with_injections_v2: { instructions } } };
 }
 
-const self = (id: string, replyTo: string): ItemSpec => ({ id, user: AUTHOR, replyTo, display: 'SelfThread' });
+const self = (id: string, replyTo: string): ItemSpec => ({
+  id,
+  user: AUTHOR,
+  replyTo,
+  display: 'SelfThread',
+});
 
 /** Root 1000 → self-thread 1001 → 1002 → 1003 (one module), then other people's conversations. */
 function firstPage(opts: { showMore?: string } = {}) {
@@ -193,12 +211,24 @@ describe('extractSelfThread', () => {
       tweet('2002', AUTHOR, '2001'), // author answering someone else
       tweet('1002', AUTHOR, '1001'),
     ];
-    expect(extractSelfThread(root, candidates, new Set()).map((t) => t.id)).toEqual(['1001', '1002', '1003']);
+    expect(extractSelfThread(root, candidates, new Set()).map((t) => t.id)).toEqual([
+      '1001',
+      '1002',
+      '1003',
+    ]);
   });
 
   test('a branch off the chain by the author still counts (reply to any thread post)', () => {
-    const candidates = [tweet('1001', AUTHOR, '1000'), tweet('1005', AUTHOR, '1001'), tweet('1002', AUTHOR, '1001')];
-    expect(extractSelfThread(root, candidates, new Set()).map((t) => t.id)).toEqual(['1001', '1002', '1005']);
+    const candidates = [
+      tweet('1001', AUTHOR, '1000'),
+      tweet('1005', AUTHOR, '1001'),
+      tweet('1002', AUTHOR, '1001'),
+    ];
+    expect(extractSelfThread(root, candidates, new Set()).map((t) => t.id)).toEqual([
+      '1001',
+      '1002',
+      '1005',
+    ]);
   });
 
   test('ignores another account replying inside the chain', () => {
@@ -208,12 +238,16 @@ describe('extractSelfThread', () => {
 
   test('falls back to X’s SelfThread label when a reply id is missing', () => {
     const candidates = [tweet('1001', AUTHOR), tweet('1002', AUTHOR)];
-    expect(extractSelfThread(root, candidates, new Set(['1001'])).map((t) => t.id)).toEqual(['1001']);
+    expect(extractSelfThread(root, candidates, new Set(['1001'])).map((t) => t.id)).toEqual([
+      '1001',
+    ]);
   });
 
   test('never includes the root itself or duplicates', () => {
     const candidates = [root, tweet('1001', AUTHOR, '1000'), tweet('1001', AUTHOR, '1000')];
-    expect(extractSelfThread(root, candidates, new Set(['1000'])).map((t) => t.id)).toEqual(['1001']);
+    expect(extractSelfThread(root, candidates, new Set(['1000'])).map((t) => t.id)).toEqual([
+      '1001',
+    ]);
   });
 
   test('empty when the root has no author id (deleted / unavailable post)', () => {
@@ -231,7 +265,8 @@ function fakeClient(byCursor: Record<string, unknown>, log: string[] = []): Engi
       const vars = request.variables as { cursor?: string; focalTweetId?: string };
       log.push(`${vars.focalTweetId}:${vars.cursor ?? '_start'}`);
       const value = byCursor[vars.cursor ?? '_start'];
-      if (value === undefined) return { ok: false, error: { code: 'FETCH_FAILED', message: 'no canned page' } };
+      if (value === undefined)
+        return { ok: false, error: { code: 'FETCH_FAILED', message: 'no canned page' } };
       return { ok: true, value };
     },
   };
@@ -242,7 +277,10 @@ const cookies = { authToken: 'a', ct0: 'c' };
 describe('engine.selfThread', () => {
   test('reads the thread on the first page and follows the self-thread ShowMore cursor', async () => {
     const log: string[] = [];
-    const client = fakeClient({ _start: firstPage({ showMore: 'SELF-MORE' }), 'SELF-MORE': moreModulePage() }, log);
+    const client = fakeClient(
+      { _start: firstPage({ showMore: 'SELF-MORE' }), 'SELF-MORE': moreModulePage() },
+      log,
+    );
     const res = await createEngine({ cookies, client }).selfThread('1000');
     expect(res.root.id).toBe('1000');
     expect(res.thread.map((t) => t.id)).toEqual(['1001', '1002', '1003', '1004', '1005']);
@@ -254,19 +292,31 @@ describe('engine.selfThread', () => {
   test('one call for a post without a thread (other people’s ShowMore cursors are not followed)', async () => {
     const log: string[] = [];
     const page = detail([
-      { type: 'TimelineAddEntries', entries: [focalEntry('1000'), module('conversationthread-2001', [
-        tweetItem('conversationthread-2001', { id: '2001', user: OTHER, replyTo: '1000' }),
-        showMoreItem('conversationthread-2001', 'OTHER'),
-      ])] },
+      {
+        type: 'TimelineAddEntries',
+        entries: [
+          focalEntry('1000'),
+          module('conversationthread-2001', [
+            tweetItem('conversationthread-2001', { id: '2001', user: OTHER, replyTo: '1000' }),
+            showMoreItem('conversationthread-2001', 'OTHER'),
+          ]),
+        ],
+      },
     ]);
-    const res = await createEngine({ cookies, client: fakeClient({ _start: page }, log) }).selfThread('1000');
+    const res = await createEngine({
+      cookies,
+      client: fakeClient({ _start: page }, log),
+    }).selfThread('1000');
     expect(res.thread).toEqual([]);
     expect(res.complete).toBe(true);
     expect(log.length).toBe(1);
   });
 
   test('stops at maxPages and says the thread may continue', async () => {
-    const client = fakeClient({ _start: firstPage({ showMore: 'SELF-MORE' }), 'SELF-MORE': moreModulePage() });
+    const client = fakeClient({
+      _start: firstPage({ showMore: 'SELF-MORE' }),
+      'SELF-MORE': moreModulePage(),
+    });
     const res = await createEngine({ cookies, client }).selfThread('1000', { maxPages: 1 });
     expect(res.thread.map((t) => t.id)).toEqual(['1001', '1002', '1003']);
     expect(res.complete).toBe(false);

@@ -1293,7 +1293,12 @@ export function createEngine(deps: EngineDeps): Engine {
         if (pages >= maxPages) break;
       }
       const root = tweets.find((t) => t.id === id) ?? placeholderRoot(id);
-      return { root, thread: extractSelfThread(root, tweets, selfIds), pages, complete: cursor === undefined };
+      return {
+        root,
+        thread: extractSelfThread(root, tweets, selfIds),
+        pages,
+        complete: cursor === undefined,
+      };
     },
 
     async userMedia(handle, opts) {

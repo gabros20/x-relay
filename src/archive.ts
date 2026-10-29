@@ -35,6 +35,7 @@ export function toArchiveTweet(tweet: Tweet): ArchiveTweet {
     result.media = tweet.mediaItems;
   }
   if (tweet.isReply !== undefined) result.isReply = tweet.isReply;
+  if (tweet.inReplyToId !== undefined) result.inReplyToId = tweet.inReplyToId;
   if (tweet.isRetweet !== undefined) result.isRetweet = tweet.isRetweet;
   if (tweet.isQuote !== undefined) result.isQuote = tweet.isQuote;
   if (tweet.retweetedBy !== undefined) result.retweetedBy = tweet.retweetedBy;
@@ -94,6 +95,9 @@ export interface MergeOptions {
 /**
  * Merge fresh ArchiveTweets into an existing ArchiveFile (or create one from scratch).
  *
+ * Either way a fresh copy of a known post inherits its `thread` / `threadCheckedAt`
+ * (fresh pulls never carry them).
+ *
  * Default (no prune):
  *   - Prepend fresh tweets (newest-first) ahead of existing.tweets.
  *   - Dedup by id: fresh entry wins (drops the older dup from existing).
@@ -114,6 +118,17 @@ export function mergeArchive(
 
   let tweets: ArchiveTweet[];
   let added: number;
+
+  // A re-pulled post arrives without its captured thread (that comes from a separate
+  // lookup) — keep what the archive already knows instead of silently dropping it.
+  const prior = new Map((existing?.tweets ?? []).map((t) => [t.id, t]));
+  for (const t of fresh) {
+    const old = prior.get(t.id);
+    if (!old) continue;
+    if (t.thread === undefined && old.thread !== undefined) t.thread = old.thread;
+    if (t.threadCheckedAt === undefined && old.threadCheckedAt !== undefined)
+      t.threadCheckedAt = old.threadCheckedAt;
+  }
 
   if (prune) {
     tweets = fresh;

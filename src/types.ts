@@ -227,6 +227,15 @@ export interface ArchiveTweet {
   quoted?: ArchiveTweet;
   /** Article title + markdown when the tweet links an X Article. */
   article?: ArticleBrief;
+  /** The post this one answers — set on replies (thread continuations answer the previous post). */
+  inReplyToId?: string;
+  /**
+   * The author's own continuation of this post (their reply chain under it), oldest first,
+   * each archived like a top-level post. Absent when there is none or it was never checked.
+   */
+  thread?: ArchiveTweet[];
+  /** ISO time the thread was last looked up (`archive --threads` / `archive repair --threads`). */
+  threadCheckedAt?: string;
 }
 
 /** A bookmark folder (list of folders or per-folder timeline). */
