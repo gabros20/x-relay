@@ -38,9 +38,12 @@ export const COMMANDS: CommandDef[] = [
     summary: 'A tweet plus its reply conversation (cursor-followed). Read only the finalists.',
     usage:
       'xrelay thread <id|url> [--limit N]   # N = max replies across pages (default 40)\n' +
+      "       xrelay thread <id|url> --self       # only the author's own continuation (their 🧵 chain)\n" +
       '       Check returnedCount / claimedCount / truncated in the result. `truncated: true`\n' +
       '       means more replies remain — raise --limit. A `warning` field means X returned no\n' +
-      '       replies despite the root claiming some: a failed fetch, NOT "no replies".',
+      '       replies despite the root claiming some: a failed fetch, NOT "no replies".\n' +
+      "       --self returns { root, thread[], pages, complete }: the author's reply chain under the\n" +
+      "       post, oldest first, without anyone else's replies (or the author's replies to others).",
   },
   {
     name: 'bookmarks',
@@ -155,7 +158,7 @@ export const COMMANDS: CommandDef[] = [
     cost: 'medium — incremental',
     summary: 'Full-fidelity capture of bookmarks or a user timeline to a rich JSON archive.',
     usage:
-      'xrelay archive bookmarks [--out <file.json>] [--limit N] [--full] [--prune] [--stdout] [--since YYYY-MM-DD]\n' +
+      'xrelay archive bookmarks [--out <file.json>] [--limit N] [--full] [--prune] [--stdout] [--since YYYY-MM-DD] [--threads [--delay ms]]\n' +
       '       xrelay archive bookmarks --folder <folder-id> [--out <file.json>] [--limit N] [--full] [--prune] [--stdout] [--since YYYY-MM-DD]\n' +
       '       xrelay archive user <handle> [--replies] [--out <file.json>] [--limit N] [--full] [--prune] [--stdout] [--since YYYY-MM-DD]\n' +
       '       xrelay archive my-posts [--replies] [--out <file.json>] [--limit N] [--full] [--prune] [--stdout] [--since YYYY-MM-DD]\n' +
@@ -166,13 +169,17 @@ export const COMMANDS: CommandDef[] = [
       '       xrelay archive likes [<handle>] [--out <file.json>] [--limit N] [--full] [--prune] [--stdout] [--since YYYY-MM-DD]\n' +
       '       xrelay archive feed [--following] [--out <file.json>] [--limit N] [--stdout] [--since YYYY-MM-DD]\n' +
       '       xrelay archive repair <file.json> --media [--dry-run] [--out <file.json>] [--concurrency N] [--limit N] [--quiet]\n' +
+      '       xrelay archive repair <file.json> --threads [--limit N] [--delay ms] [--dry-run] [--out <file.json>] [--quiet]\n' +
       '       Note: --since YYYY-MM-DD is a client-side post-filter (keeps tweets >= 00:00:00 UTC on that date).\n' +
       '             For search, --since also folds into the server-side query operator.\n' +
       '             For likes, omitting <handle> archives YOUR likes (own-likes only since June 2024).\n' +
       '             For feed, --following uses the chronological following timeline; default is the algorithmic for-you feed.\n' +
       '             For bookmarks --folder, archives tweets from a specific bookmark folder.\n' +
       '             repair --media backfills missing video/GIF posters + video durations in an existing\n' +
-      '             archive from the public syndication endpoint (no cookies); never overwrites, idempotent.',
+      '             archive from the public syndication endpoint (no cookies); never overwrites, idempotent.\n' +
+      "             --threads (any target) also captures the author's own thread of each NEW post (one\n" +
+      '             logged-in call per post with replies, max 100/run); repair --threads backfills the rest,\n' +
+      '             resumably (stamps threadCheckedAt, stops at a rate limit — just run it again).',
   },
   {
     name: 'batch',

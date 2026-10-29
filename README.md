@@ -30,6 +30,10 @@ The MCP shim is provided for parity and non-CLI hosts.
   posters and video durations in an existing archive (e.g. one imported from another tool) from X's public,
   cookie-less embed endpoint. Never overwrites, idempotent, atomic write; also exposed as the `archive-repair`
   MCP tool.
+- **Author threads** — `xrelay thread <id> --self` reads just the author's own continuation of a post (their
+  🧵 reply chain, without anyone else's replies). `xrelay archive bookmarks --threads` stores that thread on each
+  newly archived post, and `xrelay archive repair <file.json> --threads --limit 300` backfills existing
+  archives gently and resumably (one logged-in call per post with replies; stops at a rate limit).
 - **Compact search output** — `--compact` returns flat rows, `--fields a,b,c` projects chosen columns, and
   `--sort engagement` ranks by `likes + replies*3 + bookmarks*2` — far cheaper on context for ranking passes.
   Over MCP the `search` tool returns compact rows by default (`compact: false` for the full envelope).

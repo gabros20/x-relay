@@ -129,6 +129,11 @@ xrelay thread <id|url> [--limit N]
 - A `warning` field means X handed back **zero** replies while the root claims some. That is a failed fetch,
   **not** "this tweet has no replies" — retry, or use `quoters`, which reaches rebuttals and disagreement that
   a gated conversation won't give you.
+- `--self` reads only the **author's own continuation** — their 🧵 reply chain under the post, oldest first,
+  without anyone else's replies (and without the author's replies to other people). Returns
+  `{ root, thread[], pages, complete }`; one call for most posts (X cuts very long threads with a ShowMore
+  cursor that is followed, up to 5 pages — `complete: false` means it stopped there). Use it to read a
+  "1/12 🧵" post in full instead of paging through the whole conversation.
 
 ### `bookmarks` / `my-posts` — COST: cheap. Your local cache (offline, instant).
 ```
@@ -208,7 +213,7 @@ Shared flags for all archive targets:
   server-side query operator. Tweets with an unparseable date are kept (fail-open).
 
 ```
-xrelay archive bookmarks [--out <file.json>] [--limit N] [--full] [--prune] [--stdout] [--since YYYY-MM-DD]
+xrelay archive bookmarks [--out <file.json>] [--limit N] [--full] [--prune] [--stdout] [--since YYYY-MM-DD] [--threads [--delay ms]]
        xrelay archive bookmarks --folder <folder-id> [--out <file.json>] [--limit N] [--full] [--prune] [--stdout] [--since YYYY-MM-DD]
        xrelay archive user <handle> [--replies] [--out <file.json>] [--limit N] [--full] [--prune] [--stdout] [--since YYYY-MM-DD]
        xrelay archive my-posts [--replies] [--out <file.json>] [--limit N] [--full] [--prune] [--stdout] [--since YYYY-MM-DD]
@@ -219,6 +224,7 @@ xrelay archive bookmarks [--out <file.json>] [--limit N] [--full] [--prune] [--s
        xrelay archive likes [<handle>] [--out <file.json>] [--limit N] [--full] [--prune] [--stdout] [--since YYYY-MM-DD]
        xrelay archive feed [--following] [--out <file.json>] [--limit N] [--stdout] [--since YYYY-MM-DD]
        xrelay archive repair <file.json> --media [--dry-run] [--out <file.json>] [--concurrency N] [--limit N] [--quiet]
+       xrelay archive repair <file.json> --threads [--limit N] [--delay ms] [--dry-run] [--out <file.json>] [--quiet]
 ```
 - **bookmarks** (default): captures full-fidelity bookmark set (rich media, article markdown, quoted tweets,
   retweet unwrap, ISO timestamps) into `{ schema, source, generatedAt, count, newestId, tweets:[ArchiveTweet] }`.
@@ -233,7 +239,14 @@ xrelay archive bookmarks [--out <file.json>] [--limit N] [--full] [--prune] [--s
 - **likes `[<handle>]`**: archives liked tweets; defaults to your own (own-likes only since June 2024).
 - **feed `[--following]`**: archives your home feed (for-you) or `--following` (chronological). No
   membership-stop (feed ordering is not id-monotonic); `--since` post-filters client-side.
-- Returns `{ source, out?, added, total, newestId }`.
+- **`--threads`** (any target): also capture the **author's own thread** of each newly added post — their
+  continuation ("🧵 1/12 …"), stored on the post as `thread: [ArchiveTweet]` (oldest first, same fidelity) plus
+  `threadCheckedAt`. One logged-in TweetDetail call per new post **with replies** (no replies = no thread, no
+  call), strictly sequential with `--delay` ms between calls (default 3000), at most 100 per run. A rate limit
+  or error never fails the pull — unchecked posts stay unstamped for `archive repair --threads`. A post
+  re-pulled later keeps its captured thread.
+- Returns `{ source, out?, added, total, newestId, threads? }` — `threads` (with `--threads`) is
+  `{ checked, withThread, threadPosts, failed, pending, stopped? }`.
 
 #### `archive repair <file> --media` — COST: 1 public request per post with missing media; no cookies.
 ```
@@ -257,6 +270,22 @@ xrelay archive repair corpus.json --media --out fixed.json   # write a repaired 
   post is deleted/protected or X returned no matching media (expected for a few percent of old posts);
   `failed` = the fetch errored after retries (re-run to retry). `out` is present only when a file was written.
 - Over MCP: the `archive-repair` tool (`{ file, dryRun?, out?, concurrency?, limit? }`; `media` defaults on).
+
+#### `archive repair <file> --threads` — COST: 1 logged-in call per post with replies not yet checked.
+```
+xrelay archive repair corpus.json --threads --limit 300 --delay 4000   # a gentle chunk; re-run until remaining is 0
+xrelay archive repair corpus.json --threads --dry-run --limit 20       # look up and report, write nothing
+```
+- Backfills the author's thread (`thread`, `threadCheckedAt` — see `--threads` above) on an EXISTING archive:
+  every post with replies that was never checked, threads-looking posts first (🧵, "1/8", "thread"), then
+  newest first. A post checked while younger than 48h gets exactly one more look (authors keep adding).
+- Uses your **X login** (TweetDetail), unlike `--media` — so it is gentle: sequential, `--delay` ms between
+  calls (default 3000), stops at the first rate limit / auth problem, gives up after 5 failures in a row.
+- **Resumable**: each checked post is stamped, the file is saved every 25 lookups and when the run ends or
+  stops early (atomic write, formatting preserved). Deleted posts are stamped too; transient failures are not
+  (retried next run). `--dry-run` looks up but writes nothing.
+- Returns `{ file, kind:"threads", dryRun, candidates, checked, withThread, threadPosts, failed, remaining,
+  stopped?, out? }`. Over MCP: `archive-repair` with `threads: true` (plus `limit`, `delay`, `dryRun`).
 
 ### `batch` — COST: N calls, serialized. Many searches → one deduped archive.
 ```
