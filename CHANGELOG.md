@@ -1,3 +1,14 @@
+# [1.7.0](https://github.com/gabros20/x-relay/compare/v1.6.0...v1.7.0) (2026-10-29)
+
+
+### Features
+
+* **archive:** thread fields, merge keeps captured threads, thread capture core ([ad410e0](https://github.com/gabros20/x-relay/commit/ad410e0b72078f257b9120e3441c3c58270a0b09))
+* **cli:** archive --threads, archive repair --threads, thread --self ([0d36984](https://github.com/gabros20/x-relay/commit/0d369842c0166619fec757ff20f204a8049dbe97))
+* **engine:** selfThread — a post plus the author's own continuation ([819ab6c](https://github.com/gabros20/x-relay/commit/819ab6c51cf160a995179343ada1cede39897497))
+* **mcp:** thread self, archive threads, archive-repair threads ([f140116](https://github.com/gabros20/x-relay/commit/f1401165732b8416ef2a7509918041e267358d9e))
+* **parse:** reply ids, TimelineAddToModule items, self-thread page parsing ([7c99a32](https://github.com/gabros20/x-relay/commit/7c99a323df468516123287f48df17abebc33117a))
+
 # [1.6.0](https://github.com/gabros20/x-relay/compare/v1.5.7...v1.6.0) (2026-10-28)
 
 
