@@ -5,6 +5,7 @@ import {
   parseTimeline,
   parseTweetResult,
 } from '../src/engine/parse.ts';
+import { type EngineClient, createEngine } from '../src/engine/index.ts';
 import type { Tweet } from '../src/types.ts';
 
 // ── fixtures ────────────────────────────────────────────────────────────────
@@ -218,5 +219,56 @@ describe('extractSelfThread', () => {
   test('empty when the root has no author id (deleted / unavailable post)', () => {
     const ghost = { ...root, author: { ...root.author, id: '' } };
     expect(extractSelfThread(ghost, [tweet('1001', AUTHOR, '1000')], new Set())).toEqual([]);
+  });
+});
+
+// ── engine.selfThread ───────────────────────────────────────────────────────
+
+/** Serves canned TweetDetail pages keyed by the request's cursor variable. */
+function fakeClient(byCursor: Record<string, unknown>, log: string[] = []): EngineClient {
+  return {
+    get: async (_op, request) => {
+      const vars = request.variables as { cursor?: string; focalTweetId?: string };
+      log.push(`${vars.focalTweetId}:${vars.cursor ?? '_start'}`);
+      const value = byCursor[vars.cursor ?? '_start'];
+      if (value === undefined) return { ok: false, error: { code: 'FETCH_FAILED', message: 'no canned page' } };
+      return { ok: true, value };
+    },
+  };
+}
+
+const cookies = { authToken: 'a', ct0: 'c' };
+
+describe('engine.selfThread', () => {
+  test('reads the thread on the first page and follows the self-thread ShowMore cursor', async () => {
+    const log: string[] = [];
+    const client = fakeClient({ _start: firstPage({ showMore: 'SELF-MORE' }), 'SELF-MORE': moreModulePage() }, log);
+    const res = await createEngine({ cookies, client }).selfThread('1000');
+    expect(res.root.id).toBe('1000');
+    expect(res.thread.map((t) => t.id)).toEqual(['1001', '1002', '1003', '1004', '1005']);
+    expect(res.pages).toBe(2);
+    expect(res.complete).toBe(true);
+    expect(log).toEqual(['1000:_start', '1000:SELF-MORE']);
+  });
+
+  test('one call for a post without a thread (other people’s ShowMore cursors are not followed)', async () => {
+    const log: string[] = [];
+    const page = detail([
+      { type: 'TimelineAddEntries', entries: [focalEntry('1000'), module('conversationthread-2001', [
+        tweetItem('conversationthread-2001', { id: '2001', user: OTHER, replyTo: '1000' }),
+        showMoreItem('conversationthread-2001', 'OTHER'),
+      ])] },
+    ]);
+    const res = await createEngine({ cookies, client: fakeClient({ _start: page }, log) }).selfThread('1000');
+    expect(res.thread).toEqual([]);
+    expect(res.complete).toBe(true);
+    expect(log.length).toBe(1);
+  });
+
+  test('stops at maxPages and says the thread may continue', async () => {
+    const client = fakeClient({ _start: firstPage({ showMore: 'SELF-MORE' }), 'SELF-MORE': moreModulePage() });
+    const res = await createEngine({ cookies, client }).selfThread('1000', { maxPages: 1 });
+    expect(res.thread.map((t) => t.id)).toEqual(['1001', '1002', '1003']);
+    expect(res.complete).toBe(false);
   });
 });

@@ -123,6 +123,17 @@ export type ThreadResult = {
   warning?: string;
 };
 
+/** A post plus the author's own continuation (the `thread --self` command / archive threads). */
+export type SelfThreadResult = {
+  root: Tweet;
+  /** The author's reply chain under the root, oldest first (empty when there is none). */
+  thread: Tweet[];
+  /** TweetDetail pages read (1 unless the thread spilled past X's ShowMore cursor). */
+  pages: number;
+  /** False when the sweep stopped at maxPages while X still offered more of the thread. */
+  complete: boolean;
+};
+
 export type SearchProduct = 'Top' | 'Latest' | 'Media' | 'People';
 
 /** A paginated set of users (followers / following / retweeters / likers). */

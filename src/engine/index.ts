@@ -11,6 +11,7 @@ import type {
   Community,
   MediaItem,
   SearchResult,
+  SelfThreadResult,
   ThreadResult,
   Trend,
   Tweet,
@@ -50,7 +51,15 @@ import {
   parseCommunity,
   parseUserTimeline,
 } from './parse-extra.ts';
-import { findDict, parseThread, parseTimeline, parseUserResult, placeholderRoot } from './parse.ts';
+import {
+  extractSelfThread,
+  findDict,
+  parseSelfThreadPage,
+  parseThread,
+  parseTimeline,
+  parseUserResult,
+  placeholderRoot,
+} from './parse.ts';
 import {
   type SessionSpec,
   assignProxies,
@@ -130,6 +139,13 @@ export interface ThreadOpts {
   limit?: number;
 }
 
+export interface SelfThreadOpts {
+  /** Max TweetDetail pages to read (the first + ShowMore continuations). Default 5. */
+  maxPages?: number;
+}
+
+const SELF_THREAD_MAX_PAGES = 5;
+
 /** Shared options for any rich-archive timeline sweep (bookmarks/user/list/search/likes/feed). */
 export interface ArchiveOpts {
   /** Maximum number of tweets to collect (default: DEFAULT_LIMIT). */
@@ -205,6 +221,12 @@ export interface Engine {
    * can never read as "this tweet has no replies".
    */
   thread(id: string, opts?: ThreadOpts): Promise<ThreadResult>;
+  /**
+   * A post plus the author's own continuation — their reply chain under it, in order,
+   * rich (media/articles/quotes), without anyone else's replies. One TweetDetail call
+   * for most posts; a long thread X cuts with ShowMore costs one more per cut.
+   */
+  selfThread(id: string, opts?: SelfThreadOpts): Promise<SelfThreadResult>;
   list(listId: string, opts?: PageOpts): Promise<TweetPage>;
   followers(handle: string, opts?: PageOpts): Promise<UserPage>;
   following(handle: string, opts?: PageOpts): Promise<UserPage>;
@@ -1244,6 +1266,34 @@ export function createEngine(deps: EngineDeps): Engine {
         id,
         limit,
       );
+    },
+
+    async selfThread(id, opts) {
+      const maxPages = opts?.maxPages ?? SELF_THREAD_MAX_PAGES;
+      const tweets: Tweet[] = [];
+      const selfIds = new Set<string>();
+      let cursor: string | undefined;
+      let pages = 0;
+      for (;;) {
+        const value = await call(
+          'TweetDetail',
+          tweetDetailRequest({ focalTweetId: id, ...(cursor !== undefined ? { cursor } : {}) }),
+        );
+        const page = parseSelfThreadPage(value, { rich: true });
+        pages += 1;
+        tweets.push(...page.tweets);
+        for (const sid of page.selfThreadIds) selfIds.add(sid);
+        // Continue only while X cuts the author's own module (ShowMore), never for
+        // other people's conversations, and never on a repeated cursor.
+        if (page.moreCursor === undefined || page.moreCursor === cursor) {
+          cursor = undefined;
+          break;
+        }
+        cursor = page.moreCursor;
+        if (pages >= maxPages) break;
+      }
+      const root = tweets.find((t) => t.id === id) ?? placeholderRoot(id);
+      return { root, thread: extractSelfThread(root, tweets, selfIds), pages, complete: cursor === undefined };
     },
 
     async userMedia(handle, opts) {
