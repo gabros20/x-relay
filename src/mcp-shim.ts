@@ -30,6 +30,7 @@ import {
   runSearch,
   runSync,
   runThread,
+  runThreadRepair,
   runTrends,
   runUser,
   runUserMedia,
@@ -110,18 +111,21 @@ export function buildMcpArchiveOpts(args: Record<string, unknown>): ArchiveComma
     ...(args.product ? { product: args.product as SearchProduct } : {}),
     ...(args.following ? { following: true } : {}),
     ...(args.folderId ? { folderId: String(args.folderId) } : {}),
+    ...(args.threads ? { threads: true, quiet: true } : {}),
   };
 }
 
 /**
- * Map the MCP archive-repair tool args to RepairOpts. `media` defaults to true —
- * it is the only repair kind, so an agent needn't restate it — and progress is
- * always silenced (stderr chatter has no place on the stdio transport).
+ * Map the MCP archive-repair tool args to RepairOpts. `media` is the default kind (an
+ * agent needn't restate it); `threads: true` selects the thread backfill instead. Progress
+ * is always silenced (stderr chatter has no place on the stdio transport).
  */
 export function buildMcpRepairOpts(args: Record<string, unknown>): RepairOpts {
+  const threads = args.threads === true;
   return {
     file: String(args.file ?? ''),
-    ...(args.media !== false ? { media: true } : {}),
+    ...(threads ? { threads: true } : args.media !== false ? { media: true } : {}),
+    ...(args.delay !== undefined ? { delay: Number(args.delay) } : {}),
     ...(args.dryRun ? { dryRun: true } : {}),
     ...(args.out ? { out: String(args.out) } : {}),
     ...(args.concurrency !== undefined ? { concurrency: Number(args.concurrency) } : {}),
@@ -215,6 +219,12 @@ function buildServer(): McpServer {
           .positive()
           .describe('max replies to collect (default 40)')
           .optional(),
+        self: z
+          .boolean()
+          .describe(
+            "only the author's own continuation (their 🧵 reply chain), not the conversation",
+          )
+          .optional(),
       },
     },
     async (args) =>
@@ -223,6 +233,7 @@ function buildServer(): McpServer {
           getEngine(),
           String(args.target ?? ''),
           args.limit !== undefined ? Number(args.limit) : undefined,
+          args.self === true,
         ),
       ),
   );
@@ -475,6 +486,12 @@ function buildServer(): McpServer {
           .describe('following/chronological timeline (feed target)')
           .optional(),
         folderId: z.string().describe('bookmark folder id (bookmarks target)').optional(),
+        threads: z
+          .boolean()
+          .describe(
+            "also capture the author's thread (their own continuation) of each newly added post — one extra call per post with replies, capped at 100 per run",
+          )
+          .optional(),
       },
     },
     async (args) => wrap(await runArchive(getEngine(), buildMcpArchiveOpts(args))),
@@ -484,12 +501,24 @@ function buildServer(): McpServer {
     'archive-repair',
     {
       description:
-        "Repair an EXISTING archive file in place: fill missing video/GIF posters (`thumbnail`) and video `durationMs` from X's public, cookie-less syndication endpoint (no login, no account risk). Use it on archives imported from older tools, or captured before posters were recorded — incremental `archive` runs never revisit known tweets, so they stay posterless otherwise. Only absent fields are filled (never overwritten) and it is idempotent; the rest of the file is preserved and the write is atomic. Returns {candidates, filled, unresolved, failed, skipped, out}: `unresolved` = the post is deleted/protected or has no matching media, `failed` = the fetch errored after retries (re-run to retry). dryRun=true reports without writing.",
+        "Repair an EXISTING archive file in place. threads=true: look up the author's thread (their own continuation, e.g. 🧵 1/12…) of posts that have replies and were never checked, storing it as `thread` on each post — one logged-in call per post, sequential, stops at a rate limit; returns {candidates, checked, withThread, threadPosts, failed, remaining, stopped}. Default (media): fill missing video/GIF posters (`thumbnail`) and video `durationMs` from X's public, cookie-less syndication endpoint (no login, no account risk). Use it on archives imported from older tools, or captured before posters were recorded — incremental `archive` runs never revisit known tweets, so they stay posterless otherwise. Only absent fields are filled (never overwritten) and it is idempotent; the rest of the file is preserved and the write is atomic. Returns {candidates, filled, unresolved, failed, skipped, out}: `unresolved` = the post is deleted/protected or has no matching media, `failed` = the fetch errored after retries (re-run to retry). dryRun=true reports without writing.",
       inputSchema: {
         file: z.string().describe('path to an x-relay archive JSON file'),
         media: z
           .boolean()
-          .describe('repair video/GIF posters + video durations (default true; the only kind)')
+          .describe('repair video/GIF posters + video durations (the default kind; no login)')
+          .optional(),
+        threads: z
+          .boolean()
+          .describe(
+            "instead: backfill the author's thread of posts not yet checked (uses the X login; resumable — run again until remaining is 0)",
+          )
+          .optional(),
+        delay: z
+          .number()
+          .int()
+          .min(0)
+          .describe('threads: pause between lookups in ms (default 3000)')
           .optional(),
         dryRun: z.boolean().describe('fetch and report, but write nothing').optional(),
         out: z.string().describe('write the repaired archive here instead of in place').optional(),
@@ -508,7 +537,12 @@ function buildServer(): McpServer {
           .optional(),
       },
     },
-    async (args) => wrap(await runArchiveRepair(buildMcpRepairOpts(args))),
+    async (args) => {
+      const opts = buildMcpRepairOpts(args);
+      return wrap(
+        opts.threads ? await runThreadRepair(getEngine(), opts) : await runArchiveRepair(opts),
+      );
+    },
   );
 
   server.registerTool(

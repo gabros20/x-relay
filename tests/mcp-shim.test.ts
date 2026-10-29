@@ -96,4 +96,27 @@ describe('buildMcpRepairOpts', () => {
       quiet: true,
     });
   });
+
+  test('threads=true selects the thread backfill instead of media (never both)', () => {
+    expect(
+      buildMcpRepairOpts({ file: '/tmp/a.json', threads: true, delay: 4000, limit: 300 }),
+    ).toEqual({
+      file: '/tmp/a.json',
+      threads: true,
+      delay: 4000,
+      limit: 300,
+      quiet: true,
+    });
+  });
+});
+
+describe('buildMcpArchiveOpts threads', () => {
+  test('forwards threads and silences progress', () => {
+    expect(
+      buildMcpArchiveOpts({ target: 'bookmarks', out: '/tmp/a.json', threads: true }),
+    ).toMatchObject({
+      threads: true,
+      quiet: true,
+    });
+  });
 });
