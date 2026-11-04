@@ -31,16 +31,33 @@ const EPOCH_SECONDS = 1682924400;
 
 /** A lazy `import()` of the x-web signer chunk, relative to the importing module. */
 const SIGN_CHUNK_IMPORT_REGEX = /import\(\s*[`'"](\.{1,2}\/[^`'"]*sign\.o-[A-Za-z0-9_-]+\.js)[`'"]/;
+/**
+ * A lazy `import()` whose module is run through its default export —
+ * `import(`./DDz5hO08.js`).then(e=>e.default())`. Since 2026-11 the signer's
+ * name is a bare hash, so this call shape (rare: one site in ~700 lazy imports
+ * live) picks the candidates, and their content confirms which is the signer.
+ */
+const DEFAULT_CALL_IMPORT_REGEX =
+  /import\(\s*[`'"](\.{1,2}\/[^`'"]+\.js)[`'"]\s*\)\s*\.then\(\s*(\w+)\s*=>\s*\2\.default\(\s*\)\s*\)/g;
 /** Static relative imports of an ES module: `from"./assets/x.js"`. */
 const STATIC_IMPORT_REGEX = /from\s*["'](\.{1,2}\/[^"']+\.js)["']/g;
+/** Cap on unnamed candidate chunks fetched to check for the key-byte indices. */
+const MAX_UNNAMED_SIGNER_CANDIDATES = 6;
+
+/** Whether a chunk carries the key-byte index reads (`(e[4],16)`): the row index plus at least one key index. */
+function hasKeyByteIndices(source: string): boolean {
+  return [...source.matchAll(INDICES_REGEX)].length >= 2;
+}
 
 /**
- * Finds the x-web `sign.o` chunk — where the key-byte indices live since X
+ * Finds the x-web signer chunk — where the key-byte indices live since X
  * dropped `ondemand.s` from its shell (2026-09-25). Its name is content-hashed,
  * so it is discovered, not hardcoded: the shell names the entry module, and
- * either the entry or one of its static imports (live: `sentry-filter-*.js`)
- * lazy-loads the signer. Returns null when the trail is missing, so the caller
- * throws the precise resolution error.
+ * either the entry or one of its static imports lazy-loads the signer. A
+ * `sign.o-<hash>.js` name is taken as-is; since 2026-11 the name is a bare hash,
+ * so default-export lazy imports are fetched and the one carrying the key-byte
+ * indices wins. Returns null when the trail is missing, so the caller throws
+ * the precise resolution error.
  */
 export async function resolveSignChunkUrl(
   html: string,
@@ -58,17 +75,33 @@ export async function resolveSignChunkUrl(
     }
   };
 
+  const tried = new Set<string>();
+  // The signer referenced from one module: by its legacy name, else by content.
+  const signerIn = async (source: string, moduleUrl: string): Promise<string | null> => {
+    const named = SIGN_CHUNK_IMPORT_REGEX.exec(source)?.[1];
+    if (named !== undefined) return new URL(named, moduleUrl).toString();
+    for (const [, spec] of source.matchAll(DEFAULT_CALL_IMPORT_REGEX)) {
+      if (spec === undefined) continue;
+      const url = new URL(spec, moduleUrl).toString();
+      if (tried.has(url) || tried.size >= MAX_UNNAMED_SIGNER_CANDIDATES) continue;
+      tried.add(url);
+      const candidate = await read(url);
+      if (candidate !== null && hasKeyByteIndices(candidate)) return url;
+    }
+    return null;
+  };
+
   const entry = await read(entryUrl);
   if (entry === null) return null;
-  const direct = SIGN_CHUNK_IMPORT_REGEX.exec(entry)?.[1];
-  if (direct !== undefined) return new URL(direct, entryUrl).toString();
+  const direct = await signerIn(entry, entryUrl);
+  if (direct !== null) return direct;
 
   for (const [, spec] of entry.matchAll(STATIC_IMPORT_REGEX)) {
     if (spec === undefined) continue;
     const moduleUrl = new URL(spec, entryUrl).toString();
     const source = await read(moduleUrl);
-    const ref = source === null ? undefined : SIGN_CHUNK_IMPORT_REGEX.exec(source)?.[1];
-    if (ref !== undefined) return new URL(ref, moduleUrl).toString();
+    const ref = source === null ? null : await signerIn(source, moduleUrl);
+    if (ref !== null) return ref;
   }
   return null;
 }

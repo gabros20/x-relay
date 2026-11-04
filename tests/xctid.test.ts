@@ -264,4 +264,56 @@ describe('resolveSignChunkUrl', () => {
   test('returns null when no chunk references the signer', async () => {
     expect(await resolveSignChunkUrl(html, files({ [ENTRY]: 'export{}' }))).toBeNull();
   });
+
+  // 2026-11-04 live shape (issue #6): chunk names are bare content hashes, so the
+  // `sign.o-` prefix is gone. The entry statically imports assets/DVJUewZa.js,
+  // which lazy-loads the signer with import(`./DDz5hO08.js`).then(e=>e.default());
+  // the signer is recognized by its key-byte index reads `(e[4],16)`.
+  const SIGNER_SRC = 'var a=P.x(e[4],16),b=P.y(e[39],16),c=P.z(e[45],16),d=P.w(e[28],16)';
+
+  test('finds a hash-named signer by content behind a default-export lazy import', async () => {
+    const seen: string[] = [];
+    const url = await resolveSignChunkUrl(
+      html,
+      files(
+        {
+          [ENTRY]: 'import{a}from"./assets/BErNx6WF.js";import{b}from"./assets/DVJUewZa.js";',
+          'https://abs.twimg.com/x-web/x-web/assets/BErNx6WF.js':
+            'const q=()=>import(`./Bth3c7GT.js`);export{}',
+          'https://abs.twimg.com/x-web/x-web/assets/DVJUewZa.js':
+            'var nh;function rh(){return nh??=k(()=>import(`./DDz5hO08.js`).then(e=>e.default()),[]),nh}',
+          'https://abs.twimg.com/x-web/x-web/assets/DDz5hO08.js': SIGNER_SRC,
+        },
+        seen,
+      ),
+    );
+    expect(url).toBe('https://abs.twimg.com/x-web/x-web/assets/DDz5hO08.js');
+    // plain lazy imports (no .default() call) are never fetched
+    expect(seen).not.toContain('https://abs.twimg.com/x-web/x-web/assets/Bth3c7GT.js');
+  });
+
+  test('skips a default-export lazy chunk that carries no key-byte indices', async () => {
+    const url = await resolveSignChunkUrl(
+      html,
+      files({
+        [ENTRY]:
+          'a=()=>import(`./assets/Decoy1.js`).then(e=>e.default());' +
+          'b=()=>import(`./assets/Real22.js`).then(m=>m.default())',
+        'https://abs.twimg.com/x-web/x-web/assets/Decoy1.js': 'export default ()=>parseInt(x,16)',
+        'https://abs.twimg.com/x-web/x-web/assets/Real22.js': SIGNER_SRC,
+      }),
+    );
+    expect(url).toBe('https://abs.twimg.com/x-web/x-web/assets/Real22.js');
+  });
+
+  test('returns null when default-export lazy chunks carry no key-byte indices', async () => {
+    const url = await resolveSignChunkUrl(
+      html,
+      files({
+        [ENTRY]: 'a=()=>import(`./assets/Decoy1.js`).then(e=>e.default())',
+        'https://abs.twimg.com/x-web/x-web/assets/Decoy1.js': 'export default 1',
+      }),
+    );
+    expect(url).toBeNull();
+  });
 });
