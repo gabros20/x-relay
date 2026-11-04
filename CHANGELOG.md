@@ -1,3 +1,12 @@
+## [1.7.1](https://github.com/gabros20/x-relay/compare/v1.7.0...v1.7.1) (2026-11-04)
+
+
+### Bug Fixes
+
+* **doctor:** bootstrap check resolves the x-web signer chunk ([9ec0555](https://github.com/gabros20/x-relay/commit/9ec0555ef29d082a6293131e2073650f5e426349)), closes [#6](https://github.com/gabros20/x-relay/issues/6)
+* **engine:** surface transaction-id failures from whoami; don't cache failed inits ([997c21c](https://github.com/gabros20/x-relay/commit/997c21cc65f70c1822cbce949c662220ad22e0c3)), closes [#6](https://github.com/gabros20/x-relay/issues/6)
+* **xctid:** find the hash-named x-web signer chunk by content ([a674fcb](https://github.com/gabros20/x-relay/commit/a674fcb5421e3639a738bf56db8aae6e4ee0778d)), closes [#6](https://github.com/gabros20/x-relay/issues/6)
+
 # [1.7.0](https://github.com/gabros20/x-relay/compare/v1.6.0...v1.7.0) (2026-10-29)
 
 
