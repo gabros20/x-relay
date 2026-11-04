@@ -65,15 +65,47 @@ describe('runDoctor', () => {
       '<html><head><meta name="twitter-site-verification" content="k"/>' +
       '<script type="module" src="https://abs.twimg.com/x-web/x-web/entry-client-logged-out-A1.js"></script>' +
       '</head><body><svg id="loading-x-anim-0"></svg></body></html>';
+    const assets: Record<string, string> = {
+      'https://abs.twimg.com/x-web/x-web/entry-client-logged-out-A1.js':
+        'x=()=>import(`./assets/Sig9.js`).then(e=>e.default())',
+      'https://abs.twimg.com/x-web/x-web/assets/Sig9.js': 'a(e[4],16);b(e[39],16)',
+    };
     const env = await runDoctor(
       stubEngine({}),
       {},
       greenDeps({
-        fetchImpl: (async () => new Response(xweb, { status: 200 })) as unknown as typeof fetch,
+        fetchImpl: (async (url: string | URL | Request) => {
+          const asset = assets[url.toString()];
+          return new Response(asset ?? xweb, { status: 200 });
+        }) as unknown as typeof fetch,
       }),
     );
     if (!env.ok) throw new Error('expected Ok envelope');
     expect(byName(env.data, 'bootstrap')?.ok).toBe(true);
+    expect(byName(env.data, 'bootstrap')?.detail).toContain('Sig9.js');
+  });
+
+  // Issue #6: the shell looked usable, so bootstrap said ok, but the signer chunk
+  // couldn't be found. The drift then surfaced as a misleading auth failure.
+  test('an x-web shell whose signer chunk cannot be found fails the bootstrap check', async () => {
+    const xweb =
+      '<html><head><meta name="twitter-site-verification" content="k"/>' +
+      '<script type="module" src="https://abs.twimg.com/x-web/x-web/entry-client-logged-out-A1.js"></script>' +
+      '</head><body><svg id="loading-x-anim-0"></svg></body></html>';
+    const env = await runDoctor(
+      stubEngine({}),
+      {},
+      greenDeps({
+        fetchImpl: (async (url: string | URL | Request) =>
+          new Response(url.toString().endsWith('.js') ? 'export{}' : xweb, {
+            status: 200,
+          })) as unknown as typeof fetch,
+      }),
+    );
+    if (!env.ok) throw new Error('expected Ok envelope');
+    const bootstrap = byName(env.data, 'bootstrap');
+    expect(bootstrap?.ok).toBe(false);
+    expect(bootstrap?.detail).toContain('signer chunk');
   });
 
   test('all-green: env cookies present, whoami ok, search ok → healthy, 5 checks', async () => {

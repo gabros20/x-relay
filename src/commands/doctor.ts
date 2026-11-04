@@ -12,7 +12,12 @@ import { lstatSync, realpathSync } from 'node:fs';
 import type { Cookies } from '../engine/auth.ts';
 import { getCookies } from '../engine/cookies.ts';
 import { type Engine, EngineError } from '../engine/index.ts';
-import { ON_DEMAND_MARKER, handleXMigration, isUsableShell } from '../engine/xctid/index.ts';
+import {
+  ON_DEMAND_MARKER,
+  handleXMigration,
+  isUsableShell,
+  resolveSignChunkUrl,
+} from '../engine/xctid/index.ts';
 import { err, ok } from '../output.ts';
 import type { Envelope } from '../types.ts';
 
@@ -168,11 +173,30 @@ async function checkBootstrap(deps: DoctorDeps): Promise<DoctorCheck> {
           'frames and entry — X frontend drift; see src/engine/xctid/utils.ts.',
       };
     }
-    const kind = html.includes(ON_DEMAND_MARKER) ? 'responsive-web (ondemand.s)' : 'x-web (sign.o)';
+    if (html.includes(ON_DEMAND_MARKER)) {
+      return {
+        name: 'bootstrap',
+        ok: true,
+        detail: 'X responsive-web (ondemand.s) shell resolved; transaction-id runtime present.',
+      };
+    }
+    // An x-web shell keeps its key-byte indices in a lazy signer chunk; a shell can
+    // look usable while that chunk is undiscoverable (issue #6), so resolve it here.
+    const signUrl = await resolveSignChunkUrl(html, fetchImpl);
+    if (signUrl === null) {
+      return {
+        name: 'bootstrap',
+        ok: false,
+        detail:
+          'X x-web shell fetched but its signer chunk (the key-byte indices) could not be found ' +
+          'from the entry module — X frontend drift; see resolveSignChunkUrl in ' +
+          'src/engine/xctid/transaction.ts.',
+      };
+    }
     return {
       name: 'bootstrap',
       ok: true,
-      detail: `X ${kind} shell resolved; transaction-id runtime present.`,
+      detail: `X x-web shell resolved; signer chunk ${signUrl.split('/').pop()}; transaction-id runtime present.`,
     };
   } catch (e) {
     const code = e instanceof Error ? ((e as { code?: string }).code ?? 'ERROR') : 'ERROR';
