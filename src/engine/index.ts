@@ -508,15 +508,21 @@ function createTransactionProvider(
   let ctPromise: Promise<ClientTransaction> | undefined;
   const init = async (): Promise<ClientTransaction> =>
     ClientTransaction.create(await handleXMigration(fetchImpl, { sleep }));
-  const get = (): Promise<ClientTransaction> => {
-    if (ctPromise === undefined) ctPromise = init();
-    return ctPromise;
+  // A failed init is dropped, not cached: the next request re-bootstraps instead
+  // of replaying the same rejection for the life of the process (MCP is long-lived).
+  const start = (): Promise<ClientTransaction> => {
+    const attempt = init();
+    ctPromise = attempt;
+    attempt.catch(() => {
+      if (ctPromise === attempt) ctPromise = undefined;
+    });
+    return attempt;
   };
+  const get = (): Promise<ClientTransaction> => ctPromise ?? start();
   return {
     provider: async (method, path) => (await get()).generateTransactionId(method, path),
     refresh: async () => {
-      ctPromise = init();
-      await ctPromise;
+      await start();
     },
   };
 }
@@ -966,17 +972,30 @@ export function createEngine(deps: EngineDeps): Engine {
     return res.json();
   }
 
-  // The authenticated user's @handle, via the v1.1 settings endpoint. Memoized.
+  // The authenticated user's @handle, via the v1.1 settings endpoint. Memoized on
+  // success only. null means X answered without a handle (logged out); a failure
+  // before X answers (transaction-id bootstrap, network) throws, so callers don't
+  // misreport it as "not logged in".
   let mePromise: Promise<string | null> | undefined;
   async function fetchMe(): Promise<string | null> {
     const path = '/1.1/account/settings.json';
+    let res: Response;
     try {
       const lane = activeLane();
       const txid = await txn.provider('GET', path);
-      const res = await lane.fetchImpl(`https://api.x.com${path}`, {
+      res = await lane.fetchImpl(`https://api.x.com${path}`, {
         headers: buildHeaders({ cookies: lane.cookies, transactionId: txid }),
       });
-      if (!res.ok) return null;
+    } catch (e) {
+      const code = (e as { code?: unknown }).code;
+      const message = e instanceof Error ? e.message : String(e);
+      throw new EngineError(
+        'FETCH_FAILED',
+        typeof code === 'string' ? `${code}: ${message}` : message,
+      );
+    }
+    if (!res.ok) return null;
+    try {
       const data = (await res.json()) as { screen_name?: string };
       return data.screen_name ?? null;
     } catch {
@@ -984,7 +1003,13 @@ export function createEngine(deps: EngineDeps): Engine {
     }
   }
   const me = (): Promise<string | null> => {
-    if (mePromise === undefined) mePromise = fetchMe();
+    if (mePromise === undefined) {
+      const attempt = fetchMe();
+      mePromise = attempt;
+      attempt.catch(() => {
+        if (mePromise === attempt) mePromise = undefined;
+      });
+    }
     return mePromise;
   };
 

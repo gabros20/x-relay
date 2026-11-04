@@ -741,6 +741,83 @@ describe('archiveMyPosts', () => {
   });
 });
 
+// Issue #6: a failed transaction-id init made whoami() return null, so doctor
+// reported "not logged in?" while the real cause was the signer bootstrap.
+describe('whoami', () => {
+  const settingsFetch =
+    (status: number, body: unknown = { screen_name: 'myself' }) =>
+    async (): Promise<Response> =>
+      new Response(JSON.stringify(body), { status });
+
+  test('surfaces a transaction-id init failure instead of reporting logged out', async () => {
+    const engine = createEngine({
+      cookies,
+      client: fakeClientByOp({}),
+      sleep: async () => {},
+      fetchImpl: settingsFetch(200) as unknown as typeof fetch,
+      transaction: async () => {
+        throw Object.assign(new Error('Unable to resolve the X ondemand chunk URL.'), {
+          code: 'ONDEMAND_FILE_URL_RESOLUTION_ERROR',
+        });
+      },
+    });
+    const error = await engine.whoami().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(EngineError);
+    expect((error as EngineError).message).toContain('ONDEMAND_FILE_URL_RESOLUTION_ERROR');
+  });
+
+  test('does not memoize a failure: the next call retries', async () => {
+    let attempts = 0;
+    const engine = createEngine({
+      cookies,
+      client: fakeClientByOp({
+        UserByScreenName: { _start: userByScreenNameResponse('9', 'myself') },
+      }),
+      sleep: async () => {},
+      fetchImpl: settingsFetch(200) as unknown as typeof fetch,
+      transaction: async () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error('transient bootstrap failure');
+        return 'fake-txid';
+      },
+    });
+    await expect(engine.whoami()).rejects.toBeInstanceOf(EngineError);
+    const profile = await engine.whoami();
+    expect(profile?.handle).toBe('myself');
+  });
+
+  test('returns null when X rejects the session (logged out)', async () => {
+    const engine = createEngine({
+      cookies,
+      client: fakeClientByOp({}),
+      sleep: async () => {},
+      fetchImpl: settingsFetch(401, { errors: [] }) as unknown as typeof fetch,
+      transaction: async () => 'fake-txid',
+    });
+    expect(await engine.whoami()).toBeNull();
+  });
+});
+
+// The default transaction provider bootstraps from x.com; a failed bootstrap must
+// not be cached for the life of the process (the MCP server is long-lived).
+describe('transaction provider', () => {
+  test('re-attempts the bootstrap after a failed init', async () => {
+    const homepageFetches: string[] = [];
+    const fetchImpl = (async (url: string | URL | Request): Promise<Response> => {
+      const u = url.toString();
+      if (u.startsWith('https://x.com/')) homepageFetches.push(u);
+      return new Response('down', { status: 503, statusText: 'Service Unavailable' });
+    }) as unknown as typeof fetch;
+    const engine = createEngine({ cookies, sleep: async () => {}, fetchImpl });
+
+    await expect(engine.search('x', { limit: 1 })).rejects.toBeInstanceOf(EngineError);
+    const afterFirst = homepageFetches.length;
+    expect(afterFirst).toBeGreaterThan(0);
+    await expect(engine.search('x', { limit: 1 })).rejects.toBeInstanceOf(EngineError);
+    expect(homepageFetches.length).toBeGreaterThan(afterFirst);
+  });
+});
+
 // ── archiveSearch / archiveList fixtures ─────────────────────────────────────
 
 /**
